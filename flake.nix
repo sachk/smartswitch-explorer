@@ -18,20 +18,22 @@
 
       runtimeLibs = with pkgs; [
         libGL
+        zlib
         libxkbcommon
         glib
         dbus
         fontconfig
         freetype
-        xorg.libX11
-        xorg.libxcb
-        xorg.libXext
-        xorg.libXrender
-        xorg.libXi
-        xorg.libXrandr
-        xorg.libXcursor
-        xorg.libSM
-        xorg.libICE
+        libx11
+        libxcb
+        libxext
+        libxrender
+        libxi
+        libxrandr
+        libxcursor
+        libsm
+        libice
+        stdenv.cc.cc.lib
       ];
     in {
       devShells.default = pkgs.mkShell {
