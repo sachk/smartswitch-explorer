@@ -12,6 +12,7 @@ from smartswitch_core.additional_detect import (
 from smartswitch_core.applications.detect import detect_applications
 from smartswitch_core.messages.detect import detect_message_subitems
 from smartswitch_core.models import BackupInfo, Inventory, TreeItem
+from smartswitch_core.other_detect import detect_other_entries
 
 
 MAX_DISCOVERY_DEPTH = 4
@@ -115,5 +116,9 @@ def build_inventory(backup_dir: Path) -> Inventory:
     call_log_root = detect_call_log_root(backup_dir)
     if call_log_root:
         roots.append(call_log_root)
+
+    other_root = detect_other_entries(backup_dir)
+    if other_root:
+        roots.append(other_root)
 
     return Inventory(backup=backup, roots=roots)

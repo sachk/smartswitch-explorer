@@ -16,6 +16,7 @@ from smartswitch_core.applications.decrypt_extract import copy_app_apk_payload, 
 from smartswitch_core.export import make_export_root
 from smartswitch_core.messages.decode import decode_and_export_messages
 from smartswitch_core.metadata import enrich_inventory
+from smartswitch_core.other_export import export_other_entry
 from smartswitch_core.scan import build_inventory, find_backups, is_backup_dir
 from gui.config import load_settings, save_settings
 from gui.ui.explorer_page import ExplorerPage
@@ -209,6 +210,17 @@ class MainWindow(QMainWindow):
         if any(node["kind"] == "calllog" for node in selected_nodes):
             calllog_format = str(options.get("calllog_format", "csv"))
             result = export_call_log(backup_dir, export_root, output_format=calllog_format)
+            warnings.extend(result.warnings)
+            errors.extend(result.errors)
+            outputs.extend(str(path) for path in result.outputs)
+
+        other_entries = {
+            node["package_id"]
+            for node in selected_nodes
+            if node["kind"] == "other_entry" and node["package_id"]
+        }
+        for entry_name in sorted(other_entries):
+            result = export_other_entry(backup_dir, entry_name, export_root)
             warnings.extend(result.warnings)
             errors.extend(result.errors)
             outputs.extend(str(path) for path in result.outputs)

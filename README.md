@@ -10,6 +10,7 @@ Native desktop app (PySide6 + Qt widgets) for exploring Samsung Smart Switch bac
 - Galaxy Watch backups
 - Contacts
 - Call log
+- Other backup categories (raw copy + zip extraction when present)
 
 ## Key behavior
 
