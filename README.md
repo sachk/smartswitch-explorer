@@ -33,6 +33,15 @@ If your environment blocks network access, dependency installation may fail.
 uv run smartswitch-explorer
 ```
 
+## NixOS Dev Shell
+
+```bash
+nix develop
+```
+
+The flake dev shell initializes `.venv`, runs `uv sync`, and exports `LD_LIBRARY_PATH`
+with `libGL` and required Qt/X11 runtime libraries for PySide6.
+
 ## Tests
 
 ```bash
