@@ -158,7 +158,7 @@ class LandingPage(QWidget):
 
         title = QLabel("SmartSwitch Explorer")
         title.setObjectName("title")
-        title.setStyleSheet("font-size: 32px; font-weight: 700;")
+        title.setStyleSheet("font-size: 25px; font-weight: 700;")
         header_row.addWidget(title, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         divider = QFrame()
@@ -274,7 +274,7 @@ class LandingPage(QWidget):
         self.refresh_button.setIconSize(QSize(22, 22))
         self.refresh_button.setFixedSize(QSize(42, 42))
         self.refresh_button.setAutoRaise(False)
-        self.refresh_button.setStyleSheet(self._contrast_button_stylesheet(radius=21))
+        self.refresh_button.setStyleSheet(self._contrast_button_stylesheet(radius=6))
         self.refresh_button.setToolTip("Refresh detected backups")
         host_layout.addWidget(
             self.refresh_button,
@@ -297,14 +297,15 @@ class LandingPage(QWidget):
             "QToolButton {"
             "  border: 1px solid palette(dark);"
             f"  border-radius: {radius}px;"
-            "  background-color: palette(highlight);"
+            "  background-color: rgba(128, 128, 128, 88);"
             "  color: palette(highlighted-text);"
             "}"
             "QToolButton:hover {"
-            "  border-color: palette(highlighted-text);"
+            "  background-color: rgba(128, 128, 128, 128);"
+            "  border-color: palette(light);"
             "}"
             "QToolButton:pressed {"
-            "  background-color: palette(shadow);"
+            "  background-color: rgba(128, 128, 128, 168);"
             "}"
         )
 

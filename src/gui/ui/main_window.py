@@ -6,7 +6,7 @@ from PySide6.QtCore import QSize, QThreadPool, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QStackedWidget
 
-from smartswitch_core.applications.decrypt_extract import decrypt_extract_app
+from smartswitch_core.applications.decrypt_extract import copy_app_apk_payload, decrypt_extract_app
 from smartswitch_core.export import make_export_root
 from smartswitch_core.messages.decode import decode_and_export_messages
 from smartswitch_core.metadata import enrich_inventory
@@ -156,14 +156,10 @@ class MainWindow(QMainWindow):
                 outputs.extend(str(path) for path in result.outputs)
 
             if "apk" in selected_modes:
-                result = decrypt_extract_app(
+                result = copy_app_apk_payload(
                     package_id,
-                    "apk",
                     backup_dir,
                     export_root / "applications",
-                    include_decrypt=True,
-                    include_extract=False,
-                    manifest_name="manifest_apk.json",
                 )
                 warnings.extend(result.warnings)
                 errors.extend(result.errors)

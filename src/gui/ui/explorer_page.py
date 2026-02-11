@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QModelIndex, Signal
+from PySide6.QtCore import QEvent, QModelIndex, QRect, Signal, Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QFileDialog,
     QHBoxLayout,
@@ -16,11 +17,91 @@ from PySide6.QtWidgets import (
     QTreeView,
     QVBoxLayout,
     QWidget,
+    QStyledItemDelegate,
+    QStyle,
+    QStyleOptionViewItem,
 )
 
 from smartswitch_core.models import EnrichmentPatch, Inventory
 from gui.ui.export_options_dialog import ExportOptionsDialog
 from gui.ui.tree_model import InventoryTreeModel, TreeFilterProxyModel
+
+
+class ModernTreeCheckDelegate(QStyledItemDelegate):
+    def _checkbox_rect(self, option: QStyleOptionViewItem) -> QRect:
+        size = max(16, min(option.rect.height() - 8, 20))
+        y = option.rect.center().y() - (size // 2)
+        return QRect(option.rect.x() + 8, y, size, size)
+
+    def paint(self, painter, option, index) -> None:  # type: ignore[override]
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+
+        style = opt.widget.style() if opt.widget else QApplication.style()
+        style.drawPrimitive(QStyle.PrimitiveElement.PE_PanelItemViewItem, opt, painter, opt.widget)
+
+        check_state = index.data(Qt.ItemDataRole.CheckStateRole)
+        has_check = check_state is not None
+        text_x = opt.rect.x() + 8
+        if has_check:
+            check_rect = self._checkbox_rect(opt)
+            border = opt.palette.color(opt.palette.ColorRole.Midlight)
+            fill = opt.palette.color(opt.palette.ColorRole.Base)
+            if check_state == Qt.CheckState.Checked:
+                fill = opt.palette.color(opt.palette.ColorRole.Highlight)
+                border = opt.palette.color(opt.palette.ColorRole.HighlightedText)
+            elif check_state == Qt.CheckState.PartiallyChecked:
+                fill = opt.palette.color(opt.palette.ColorRole.AlternateBase)
+
+            painter.save()
+            painter.setRenderHint(painter.RenderHint.Antialiasing, True)
+            painter.setPen(border)
+            painter.setBrush(fill)
+            painter.drawRoundedRect(check_rect, 4, 4)
+
+            if check_state == Qt.CheckState.Checked:
+                pen = opt.palette.color(opt.palette.ColorRole.HighlightedText)
+                painter.setPen(pen)
+                painter.drawLine(check_rect.left() + 4, check_rect.center().y(), check_rect.left() + 8, check_rect.bottom() - 4)
+                painter.drawLine(check_rect.left() + 8, check_rect.bottom() - 4, check_rect.right() - 3, check_rect.top() + 4)
+            elif check_state == Qt.CheckState.PartiallyChecked:
+                pen = opt.palette.color(opt.palette.ColorRole.Text)
+                painter.setPen(pen)
+                painter.drawLine(check_rect.left() + 4, check_rect.center().y(), check_rect.right() - 4, check_rect.center().y())
+            painter.restore()
+            text_x = check_rect.right() + 8
+
+        icon_x = text_x
+        if not opt.icon.isNull():
+            icon_size = max(16, min(opt.rect.height() - 8, 20))
+            icon_rect = QRect(icon_x, opt.rect.center().y() - (icon_size // 2), icon_size, icon_size)
+            opt.icon.paint(painter, icon_rect)
+            text_x = icon_rect.right() + 6
+
+        text_rect = QRect(text_x, opt.rect.y(), opt.rect.right() - text_x - 6, opt.rect.height())
+        if opt.state & QStyle.StateFlag.State_Selected:
+            painter.setPen(opt.palette.color(opt.palette.ColorRole.HighlightedText))
+        else:
+            painter.setPen(opt.palette.color(opt.palette.ColorRole.Text))
+        painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, opt.text)
+
+    def editorEvent(self, event, model, option, index) -> bool:  # type: ignore[override]
+        if not (index.flags() & Qt.ItemFlag.ItemIsUserCheckable):
+            return super().editorEvent(event, model, option, index)
+
+        if event.type() == QEvent.Type.MouseButtonRelease:
+            check_rect = self._checkbox_rect(option)
+            if check_rect.contains(event.pos()):
+                state = index.data(Qt.ItemDataRole.CheckStateRole)
+                next_state = Qt.CheckState.Unchecked if state == Qt.CheckState.Checked else Qt.CheckState.Checked
+                return bool(model.setData(index, next_state, Qt.ItemDataRole.CheckStateRole))
+
+        if event.type() == QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Select):
+            state = index.data(Qt.ItemDataRole.CheckStateRole)
+            next_state = Qt.CheckState.Unchecked if state == Qt.CheckState.Checked else Qt.CheckState.Checked
+            return bool(model.setData(index, next_state, Qt.ItemDataRole.CheckStateRole))
+
+        return super().editorEvent(event, model, option, index)
 
 
 class ExplorerPage(QWidget):
@@ -66,19 +147,7 @@ class ExplorerPage(QWidget):
         self.tree.setUniformRowHeights(True)
         self.tree.setAlternatingRowColors(True)
         self.tree.setHeaderHidden(False)
-        self.tree.setStyleSheet(
-            "QTreeView::indicator {"
-            "  width: 18px;"
-            "  height: 18px;"
-            "  border: 1px solid palette(light);"
-            "  border-radius: 4px;"
-            "  background: palette(base);"
-            "}"
-            "QTreeView::indicator:checked {"
-            "  border-color: palette(highlighted-text);"
-            "  background: palette(highlight);"
-            "}"
-        )
+        self.tree.setItemDelegate(ModernTreeCheckDelegate(self.tree))
         layout.addWidget(self.tree, 1)
 
         actions = QHBoxLayout()
@@ -137,12 +206,10 @@ class ExplorerPage(QWidget):
 
         has_messages = any(node["kind"] == "message_subitem" for node in selected)
         has_app_data = any(node["kind"] == "app_data" for node in selected)
-        has_app_apk = any(node["kind"] == "app_apk" for node in selected)
 
         dialog = ExportOptionsDialog(
             has_messages=has_messages,
             has_app_data=has_app_data,
-            has_app_apk=has_app_apk,
             parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:

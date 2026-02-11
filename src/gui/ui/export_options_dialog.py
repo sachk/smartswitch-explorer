@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 
 
 class ExportOptionsDialog(QDialog):
-    def __init__(self, has_messages: bool, has_app_data: bool, has_app_apk: bool, parent=None) -> None:
+    def __init__(self, has_messages: bool, has_app_data: bool, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Export Options")
         self.setModal(True)
@@ -29,7 +29,6 @@ class ExportOptionsDialog(QDialog):
 
         self.messages_combo: QComboBox | None = None
         self.app_data_combo: QComboBox | None = None
-        self.app_apk_combo: QComboBox | None = None
 
         if has_messages:
             row.addWidget(QLabel("Messages"))
@@ -47,13 +46,6 @@ class ExportOptionsDialog(QDialog):
             self.app_data_combo.addItem("Both", "both")
             row.addWidget(self.app_data_combo, 1)
 
-        if has_app_apk:
-            row.addWidget(QLabel("Application APKs"))
-            self.app_apk_combo = QComboBox()
-            self.app_apk_combo.addItem("Decrypted APK", "decrypted_apk")
-            self.app_apk_combo.setEnabled(False)
-            row.addWidget(self.app_apk_combo, 1)
-
         layout.addLayout(row)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok)
@@ -68,6 +60,4 @@ class ExportOptionsDialog(QDialog):
             out["messages_format"] = str(self.messages_combo.currentData())
         if self.app_data_combo is not None:
             out["app_data_mode"] = str(self.app_data_combo.currentData())
-        if self.app_apk_combo is not None:
-            out["app_apk_mode"] = str(self.app_apk_combo.currentData())
         return out

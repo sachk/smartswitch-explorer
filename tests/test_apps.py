@@ -9,7 +9,7 @@ import hashlib
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 
-from smartswitch_core.applications.decrypt_extract import decrypt_extract_app
+from smartswitch_core.applications.decrypt_extract import copy_app_apk_payload, decrypt_extract_app
 from smartswitch_core.crypto.common import DEFAULT_PENC_IV, derive_dummy_key
 
 
@@ -93,3 +93,20 @@ def test_decrypt_extract_app_apk_and_data(tmp_path: Path) -> None:
     assert (out / "com.example.app" / "manifest.json").exists()
     assert (out / "com.example.app" / "apk_files" / "hello.txt").read_bytes() == b"world"
     assert (out / "com.example.app" / "data_files" / "apps" / "com.example.app" / "_manifest").exists()
+
+
+def test_copy_app_apk_payload(tmp_path: Path) -> None:
+    backup = tmp_path / "backup"
+    apk_dir = backup / "APKFILE"
+    apk_dir.mkdir(parents=True)
+
+    (apk_dir / "com.example.app.penc").write_bytes(b"enc")
+    (apk_dir / "com.example.app_split_config.en.apk").write_bytes(b"apk")
+
+    out = tmp_path / "out"
+    result = copy_app_apk_payload("com.example.app", backup, out)
+
+    assert result.ok
+    assert (out / "com.example.app" / "apk_payload" / "com.example.app.penc").exists()
+    assert (out / "com.example.app" / "apk_payload" / "com.example.app_split_config.en.apk").exists()
+    assert (out / "com.example.app" / "manifest_apk.json").exists()

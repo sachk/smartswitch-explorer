@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import shutil
 import struct
 import tarfile
 import zlib
@@ -264,4 +265,44 @@ def decrypt_extract_app(
     write_manifest(manifest_path, manifest)
     outputs.append(manifest_path)
 
+    return ExportResult(ok=not errors, outputs=outputs, warnings=warnings, errors=errors)
+
+
+def copy_app_apk_payload(package_id: str, backup_dir: Path, out_dir: Path) -> ExportResult:
+    outputs: list[Path] = []
+    warnings: list[str] = []
+    errors: list[str] = []
+
+    apk_dir = backup_dir / "APKFILE"
+    package_out = out_dir / package_id / "apk_payload"
+    package_out.mkdir(parents=True, exist_ok=True)
+
+    copied = 0
+    candidates = [apk_dir / f"{package_id}.penc"]
+    candidates.extend(sorted(apk_dir.glob(f"{package_id}*.apk")))
+
+    for source in candidates:
+        if not source.exists():
+            continue
+        try:
+            target = package_out / source.name
+            shutil.copy2(source, target)
+            outputs.append(target)
+            copied += 1
+        except OSError as exc:
+            warnings.append(f"Failed to copy {source.name}: {exc}")
+
+    if copied == 0:
+        warnings.append(f"No APK payload files found for {package_id}")
+
+    manifest = {
+        "package_id": package_id,
+        "mode": "apk_payload_copy",
+        "copied_files": copied,
+        "warnings": warnings,
+        "errors": errors,
+    }
+    manifest_path = package_out.parent / "manifest_apk.json"
+    write_manifest(manifest_path, manifest)
+    outputs.append(manifest_path)
     return ExportResult(ok=not errors, outputs=outputs, warnings=warnings, errors=errors)
