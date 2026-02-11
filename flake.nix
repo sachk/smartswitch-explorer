@@ -19,6 +19,7 @@
       runtimeLibs = with pkgs; [
         libGL
         zlib
+        zstd
         libxkbcommon
         glib
         dbus
