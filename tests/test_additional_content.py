@@ -53,12 +53,16 @@ def test_inventory_detects_media_watch_contacts_and_calllog(tmp_path: Path) -> N
 def test_export_media_watch_and_contacts(tmp_path: Path) -> None:
     backup = tmp_path / "backup"
     (backup / "PHOTO_ORIGIN").mkdir(parents=True)
+    (backup / "Photo").mkdir(parents=True)
     (backup / "VIDEO_ORIGIN").mkdir(parents=True)
+    (backup / "Video").mkdir(parents=True)
     (backup / "GALAXYWATCH_CURRENT").mkdir(parents=True)
     (backup / "CONTACT").mkdir(parents=True)
 
     (backup / "PHOTO_ORIGIN" / "photo1").write_bytes(b"p")
+    (backup / "Photo" / "photo2.jpg").write_bytes(b"p2")
     (backup / "VIDEO_ORIGIN" / "video1").write_bytes(b"v")
+    (backup / "Video" / "video2.mp4").write_bytes(b"v2")
     (backup / "GALAXYWATCH_CURRENT" / "watch1.encp").write_bytes(b"w")
     (backup / "CONTACT" / "Contact.csv").write_text("Name,Number\nAlice,123\n", encoding="utf-8")
 
@@ -69,8 +73,10 @@ def test_export_media_watch_and_contacts(tmp_path: Path) -> None:
     contacts = export_contacts(backup, out, output_format="csv")
 
     assert photos.ok and videos.ok and watch.ok and contacts.ok
-    assert (out / "media" / "photos" / "photo1").exists()
-    assert (out / "media" / "videos" / "video1").exists()
+    assert (out / "media" / "photos" / "PHOTO_ORIGIN" / "photo1").exists()
+    assert (out / "media" / "photos" / "Photo" / "photo2.jpg").exists()
+    assert (out / "media" / "videos" / "VIDEO_ORIGIN" / "video1").exists()
+    assert (out / "media" / "videos" / "Video" / "video2.mp4").exists()
     assert (out / "galaxy_watch" / "current" / "watch1.encp").exists()
     assert (out / "contacts" / "csv" / "Contact.csv").exists()
 

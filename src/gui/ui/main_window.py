@@ -16,9 +16,10 @@ from smartswitch_core.applications.decrypt_extract import copy_app_apk_payload, 
 from smartswitch_core.export import make_export_root
 from smartswitch_core.messages.decode import decode_and_export_messages
 from smartswitch_core.metadata import enrich_inventory
-from smartswitch_core.other_export import export_other_entry
+from smartswitch_core.other_export import export_other_entry, export_settings_entry, export_storage_entry
 from smartswitch_core.scan import build_inventory, find_backups, is_backup_dir
 from gui.config import load_settings, save_settings
+from gui.localization import tr
 from gui.ui.explorer_page import ExplorerPage
 from gui.ui.landing_page import LandingPage
 from gui.ui.workers import FunctionWorker
@@ -27,7 +28,7 @@ from gui.ui.workers import FunctionWorker
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("SmartSwitch Explorer")
+        self.setWindowTitle(tr("MainWindow", "SmartSwitch Explorer"))
         self.resize(QSize(544, 720))
 
         self.thread_pool = QThreadPool(self)
@@ -60,7 +61,11 @@ class MainWindow(QMainWindow):
         if not is_backup_dir(backup_dir):
             backups = find_backups(backup_dir)
             if not backups:
-                QMessageBox.warning(self, "Invalid backup", "No Smart Switch backup found in that folder.")
+                QMessageBox.warning(
+                    self,
+                    tr("MainWindow", "Invalid backup"),
+                    tr("MainWindow", "No Smart Switch backup found in that folder."),
+                )
                 return
             backup_dir = backups[0].path
 
@@ -81,10 +86,18 @@ class MainWindow(QMainWindow):
 
     def _run_action(self, options: dict, selected_nodes: list[dict], destination: Path) -> None:
         if not selected_nodes:
-            QMessageBox.information(self, "Nothing selected", "Select at least one item to process.")
+            QMessageBox.information(
+                self,
+                tr("MainWindow", "Nothing selected"),
+                tr("MainWindow", "Select at least one item to process."),
+            )
             return
         if self.current_backup is None:
-            QMessageBox.warning(self, "No backup", "Open a backup first.")
+            QMessageBox.warning(
+                self,
+                tr("MainWindow", "No backup"),
+                tr("MainWindow", "Open a backup first."),
+            )
             return
 
         destination.mkdir(parents=True, exist_ok=True)
@@ -225,6 +238,28 @@ class MainWindow(QMainWindow):
             errors.extend(result.errors)
             outputs.extend(str(path) for path in result.outputs)
 
+        storage_entries = {
+            node["package_id"]
+            for node in selected_nodes
+            if node["kind"] == "storage_entry" and node["package_id"]
+        }
+        for entry_name in sorted(storage_entries):
+            result = export_storage_entry(backup_dir, entry_name, export_root)
+            warnings.extend(result.warnings)
+            errors.extend(result.errors)
+            outputs.extend(str(path) for path in result.outputs)
+
+        settings_entries = {
+            node["package_id"]
+            for node in selected_nodes
+            if node["kind"] == "settings_entry" and node["package_id"]
+        }
+        for entry_name in sorted(settings_entries):
+            result = export_settings_entry(backup_dir, entry_name, export_root)
+            warnings.extend(result.warnings)
+            errors.extend(result.errors)
+            outputs.extend(str(path) for path in result.outputs)
+
         return {
             "ok": not errors,
             "warnings": warnings,
@@ -241,29 +276,37 @@ class MainWindow(QMainWindow):
         export_root = payload.get("export_root", "")
 
         if ok:
-            summary = [f"Export complete: {export_root}"]
+            summary = [f"{tr('MainWindow', 'Export complete')}: {export_root}"]
             if warnings:
-                summary.append(f"Warnings: {len(warnings)}")
-            self._show_export_result("Done", "\n".join(summary), export_root, warning=False)
+                summary.append(f"{tr('MainWindow', 'Warnings')}: {len(warnings)}")
+            self._show_export_result(tr("MainWindow", "Done"), "\n".join(summary), export_root, warning=False)
         else:
-            summary = [f"Export finished with errors: {export_root}", f"Errors: {len(errors)}"]
+            summary = [
+                f"{tr('MainWindow', 'Export finished with errors')}: {export_root}",
+                f"{tr('MainWindow', 'Errors')}: {len(errors)}",
+            ]
             if warnings:
-                summary.append(f"Warnings: {len(warnings)}")
-            self._show_export_result("Completed with errors", "\n".join(summary), export_root, warning=True)
+                summary.append(f"{tr('MainWindow', 'Warnings')}: {len(warnings)}")
+            self._show_export_result(
+                tr("MainWindow", "Completed with errors"),
+                "\n".join(summary),
+                export_root,
+                warning=True,
+            )
 
     def _handle_action_error(self, message: str) -> None:
         self.explorer_page.set_busy(False)
         self._show_error(message)
 
     def _show_error(self, message: str) -> None:
-        QMessageBox.critical(self, "Error", message)
+        QMessageBox.critical(self, tr("MainWindow", "Error"), message)
 
     def _show_export_result(self, title: str, text: str, export_root: str, *, warning: bool) -> None:
         box = QMessageBox(self)
         box.setWindowTitle(title)
         box.setText(text)
         box.setIcon(QMessageBox.Icon.Warning if warning else QMessageBox.Icon.Information)
-        open_button = box.addButton("Open Folder", QMessageBox.ButtonRole.ActionRole)
+        open_button = box.addButton(tr("MainWindow", "Open Folder"), QMessageBox.ButtonRole.ActionRole)
         close_button = box.addButton(QMessageBox.StandardButton.Close)
         box.setDefaultButton(close_button)
         box.exec()

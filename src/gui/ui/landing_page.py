@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QStyle,
 )
 
+from gui.localization import tr
 from smartswitch_core.scan import discover_backup_roots, find_backups
 
 
@@ -156,7 +157,7 @@ class LandingPage(QWidget):
         header_row = QHBoxLayout()
         header_row.setSpacing(12)
 
-        title = QLabel("SmartSwitch Explorer")
+        title = QLabel(tr("LandingPage", "SmartSwitch Explorer"))
         title.setObjectName("title")
         title.setStyleSheet("font-size: 25px; font-weight: 700;")
         header_row.addWidget(title, alignment=Qt.AlignmentFlag.AlignVCenter)
@@ -166,7 +167,7 @@ class LandingPage(QWidget):
         divider.setFrameShadow(QFrame.Shadow.Sunken)
         header_row.addWidget(divider)
 
-        subtitle = QLabel("Open a backup folder or choose from automatically detected backups.")
+        subtitle = QLabel(tr("LandingPage", "Open a backup folder or choose from automatically detected backups."))
         subtitle.setWordWrap(True)
         subtitle.setStyleSheet("font-size: 16px;")
         subtitle.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -191,7 +192,7 @@ class LandingPage(QWidget):
         path_picker_layout.setSpacing(0)
 
         self.path_input = QLineEdit()
-        self.path_input.setPlaceholderText("Select a backup folder")
+        self.path_input.setPlaceholderText(tr("LandingPage", "Select a backup folder"))
         self.path_input.setMinimumHeight(42)
         self.path_input.setFrame(False)
         self.path_input.setStyleSheet("font-size: 14px; padding-left: 12px; padding-right: 8px;")
@@ -204,7 +205,7 @@ class LandingPage(QWidget):
             self._icon_for_button(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon), QSize(20, 20))
         )
         self.open_folder_button.setIconSize(QSize(20, 20))
-        self.open_folder_button.setToolTip("Open folder chooser")
+        self.open_folder_button.setToolTip(tr("LandingPage", "Open folder chooser"))
         self.open_folder_button.setAutoRaise(False)
         self.open_folder_button.setStyleSheet(
             "QToolButton {"
@@ -226,7 +227,7 @@ class LandingPage(QWidget):
         picker_row.addWidget(self.path_picker, 1)
         layout.addWidget(picker_host)
 
-        self.backup_group = QGroupBox("Detected Backups")
+        self.backup_group = QGroupBox(tr("LandingPage", "Detected Backups"))
         self.backup_group.setStyleSheet(
             "QGroupBox { font-size: 20px; font-weight: 600; }"
             "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
@@ -255,7 +256,7 @@ class LandingPage(QWidget):
         empty_row.setContentsMargins(0, 0, 0, 0)
         empty_row.addStretch(15)
 
-        self.empty_label = QLabel("No backups detected")
+        self.empty_label = QLabel(tr("LandingPage", "No backups detected"))
         self.empty_label.setWordWrap(True)
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setStyleSheet("font-size: 24px; font-weight: 600; color: palette(text);")
@@ -275,7 +276,7 @@ class LandingPage(QWidget):
         self.refresh_button.setFixedSize(QSize(42, 42))
         self.refresh_button.setAutoRaise(False)
         self.refresh_button.setStyleSheet(self._contrast_button_stylesheet(radius=6))
-        self.refresh_button.setToolTip("Refresh detected backups")
+        self.refresh_button.setToolTip(tr("LandingPage", "Refresh detected backups"))
         host_layout.addWidget(
             self.refresh_button,
             0,
@@ -390,7 +391,7 @@ class LandingPage(QWidget):
         self.backup_list.show()
 
     def _open_folder_dialog(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Select Backup Folder")
+        path = QFileDialog.getExistingDirectory(self, tr("LandingPage", "Select Backup Folder"))
         if not path:
             return
         selected = Path(path).expanduser()

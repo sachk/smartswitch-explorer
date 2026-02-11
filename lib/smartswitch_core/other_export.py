@@ -133,6 +133,7 @@ def export_other_entry(
     entry_name: str,
     out_dir: Path,
     *,
+    category: str = "other_data",
     dummy_hex: str = DEFAULT_DUMMY_HEX,
 ) -> ExportResult:
     outputs: list[Path] = []
@@ -143,7 +144,7 @@ def export_other_entry(
     if not source.exists():
         return ExportResult(ok=False, outputs=outputs, warnings=warnings, errors=[f"Missing entry: {entry_name}"])
 
-    entry_out = out_dir / "other_data" / entry_name
+    entry_out = out_dir / category / entry_name
     raw_out = entry_out / "raw"
     decoded_out = entry_out / "decoded"
     copied_files = 0
@@ -289,3 +290,35 @@ def export_other_entry(
     outputs.append(manifest_path)
 
     return ExportResult(ok=not errors, outputs=outputs, warnings=warnings, errors=errors)
+
+
+def export_storage_entry(
+    backup_dir: Path,
+    entry_name: str,
+    out_dir: Path,
+    *,
+    dummy_hex: str = DEFAULT_DUMMY_HEX,
+) -> ExportResult:
+    return export_other_entry(
+        backup_dir,
+        entry_name,
+        out_dir,
+        category="storage",
+        dummy_hex=dummy_hex,
+    )
+
+
+def export_settings_entry(
+    backup_dir: Path,
+    entry_name: str,
+    out_dir: Path,
+    *,
+    dummy_hex: str = DEFAULT_DUMMY_HEX,
+) -> ExportResult:
+    return export_other_entry(
+        backup_dir,
+        entry_name,
+        out_dir,
+        category="settings",
+        dummy_hex=dummy_hex,
+    )

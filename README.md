@@ -10,6 +10,7 @@ Native desktop app (PySide6 + Qt widgets) for exploring Samsung Smart Switch bac
 - Galaxy Watch backups
 - Contacts
 - Call log
+- Storage and settings categories
 - Other backup categories (raw copy + zip extraction when present)
 - Encrypted Smart Switch artifacts (shared IV-prefix AES decoder)
 
@@ -19,6 +20,8 @@ Native desktop app (PySide6 + Qt widgets) for exploring Samsung Smart Switch bac
 - No decode/decrypt runs before a user action.
 - Metadata enrichment (pretty app names/icons, backup labels) is optional and async.
 - Tree sections are collapsed by default.
+- `Media -> Photos` exports both `Photo` and `PHOTO_ORIGIN`.
+- `Media -> Videos` exports both `Video` and `VIDEO_ORIGIN`.
 
 ## Layout
 
@@ -76,3 +79,4 @@ Default destination:
 
 - Call log decryption details: `docs/calllog_format.md`
 - Encrypted format coverage: `docs/encrypted_formats.md`
+- Localization setup: `docs/localization.md`

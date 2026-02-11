@@ -9,6 +9,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from gui.localization import tr
+
 
 class ExportOptionsDialog(QDialog):
     def __init__(
@@ -20,7 +22,7 @@ class ExportOptionsDialog(QDialog):
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Export Options")
+        self.setWindowTitle(tr("ExportOptionsDialog", "Export Options"))
         self.setModal(True)
         self.setMinimumWidth(520)
 
@@ -28,7 +30,7 @@ class ExportOptionsDialog(QDialog):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(12)
 
-        intro = QLabel("Choose output format by data type:")
+        intro = QLabel(tr("ExportOptionsDialog", "Choose output format by data type:"))
         intro.setStyleSheet("font-size: 14px; font-weight: 600;")
         layout.addWidget(intro)
 
@@ -43,36 +45,36 @@ class ExportOptionsDialog(QDialog):
             self.messages_combo.setStyleSheet("font-size: 14px;")
             self.messages_combo.addItem("JSON", "json")
             self.messages_combo.addItem("CSV", "csv")
-            self.messages_combo.addItem("Native (.bk / raw)", "native")
-            self._add_option_row(layout, "Messages", self.messages_combo)
+            self.messages_combo.addItem(tr("ExportOptionsDialog", "Native (.bk / raw)"), "native")
+            self._add_option_row(layout, tr("ExportOptionsDialog", "Messages"), self.messages_combo)
 
         if has_app_data:
             self.app_data_combo = QComboBox()
             self.app_data_combo.setMinimumHeight(40)
             self.app_data_combo.setStyleSheet("font-size: 14px;")
-            self.app_data_combo.addItem("Extracted Files", "extract")
-            self.app_data_combo.addItem("Decrypted Tar", "decrypt")
-            self.app_data_combo.addItem("Both", "both")
-            self._add_option_row(layout, "Application Data", self.app_data_combo)
+            self.app_data_combo.addItem(tr("ExportOptionsDialog", "Extracted Files"), "extract")
+            self.app_data_combo.addItem(tr("ExportOptionsDialog", "Decrypted Tar"), "decrypt")
+            self.app_data_combo.addItem(tr("ExportOptionsDialog", "Both"), "both")
+            self._add_option_row(layout, tr("ExportOptionsDialog", "Application Data"), self.app_data_combo)
 
         if has_contacts:
             self.contacts_combo = QComboBox()
             self.contacts_combo.setMinimumHeight(40)
             self.contacts_combo.setStyleSheet("font-size: 14px;")
             self.contacts_combo.addItem("CSV", "csv")
-            self.contacts_combo.addItem("Native Files", "native")
-            self._add_option_row(layout, "Contacts", self.contacts_combo)
+            self.contacts_combo.addItem(tr("ExportOptionsDialog", "Native Files"), "native")
+            self._add_option_row(layout, tr("ExportOptionsDialog", "Contacts"), self.contacts_combo)
 
         if has_calllog:
             self.calllog_combo = QComboBox()
             self.calllog_combo.setMinimumHeight(40)
             self.calllog_combo.setStyleSheet("font-size: 14px;")
             self.calllog_combo.addItem("CSV", "csv")
-            self.calllog_combo.addItem("Native (encrypted zip)", "native")
-            self._add_option_row(layout, "Call Log", self.calllog_combo)
+            self.calllog_combo.addItem(tr("ExportOptionsDialog", "Native (encrypted zip)"), "native")
+            self._add_option_row(layout, tr("ExportOptionsDialog", "Call Log"), self.calllog_combo)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Export")
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(tr("ExportOptionsDialog", "Export"))
         buttons.button(QDialogButtonBox.StandardButton.Ok).setMinimumHeight(38)
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setMinimumHeight(38)
         buttons.setStyleSheet("QPushButton { font-size: 14px; }")

@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from smartswitch_core.models import EnrichmentPatch, Inventory
+from gui.localization import tr
 from gui.ui.export_options_dialog import ExportOptionsDialog
 from gui.ui.tree_model import InventoryTreeModel, TreeFilterProxyModel
 
@@ -130,22 +131,22 @@ class ExplorerPage(QWidget):
 
         top = QHBoxLayout()
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search applications and messages...")
+        self.search.setPlaceholderText(tr("ExplorerPage", "Search applications and messages..."))
         self.destination = QLineEdit()
-        self.destination.setPlaceholderText("Destination folder")
+        self.destination.setPlaceholderText(tr("ExplorerPage", "Destination folder"))
         self.pick_destination = QToolButton()
         self.pick_destination.setText("...")
-        self.pick_destination.setToolTip("Pick destination folder")
-        top.addWidget(QLabel("Search"))
+        self.pick_destination.setToolTip(tr("ExplorerPage", "Pick destination folder"))
+        top.addWidget(QLabel(tr("ExplorerPage", "Search")))
         top.addWidget(self.search, 2)
-        top.addWidget(QLabel("Destination"))
+        top.addWidget(QLabel(tr("ExplorerPage", "Destination")))
         top.addWidget(self.destination, 2)
         top.addWidget(self.pick_destination)
         layout.addLayout(top)
 
         tools = QHBoxLayout()
-        self.expand_all_button = QPushButton("Expand All")
-        self.collapse_all_button = QPushButton("Collapse All")
+        self.expand_all_button = QPushButton(tr("ExplorerPage", "Expand All"))
+        self.collapse_all_button = QPushButton(tr("ExplorerPage", "Collapse All"))
         tools.addWidget(self.expand_all_button)
         tools.addWidget(self.collapse_all_button)
         tools.addStretch(1)
@@ -164,7 +165,7 @@ class ExplorerPage(QWidget):
         layout.addWidget(self.tree, 1)
 
         actions = QHBoxLayout()
-        self.export_button = QPushButton("Export Selected")
+        self.export_button = QPushButton(tr("ExplorerPage", "Export Selected"))
         self.export_button.setMinimumHeight(40)
         actions.addWidget(self.export_button)
         layout.addLayout(actions)
@@ -176,7 +177,7 @@ class ExplorerPage(QWidget):
 
         self.export_button.clicked.connect(self._emit_action)
 
-        clear_action = QAction("Clear", self)
+        clear_action = QAction(tr("ExplorerPage", "Clear"), self)
         clear_action.triggered.connect(lambda: self.search.setText(""))
         self.search.addAction(clear_action, QLineEdit.ActionPosition.TrailingPosition)
 
@@ -207,14 +208,18 @@ class ExplorerPage(QWidget):
         self.tree.collapseAll()
 
     def _pick_destination(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Select Destination Folder")
+        path = QFileDialog.getExistingDirectory(self, tr("ExplorerPage", "Select Destination Folder"))
         if path:
             self.destination.setText(path)
 
     def _emit_action(self) -> None:
         selected = self.model.checked_leaf_nodes()
         if not selected:
-            QMessageBox.information(self, "Nothing selected", "Select at least one item to export.")
+            QMessageBox.information(
+                self,
+                tr("ExplorerPage", "Nothing selected"),
+                tr("ExplorerPage", "Select at least one item to export."),
+            )
             return
 
         has_messages = any(node["kind"] == "message_subitem" for node in selected)

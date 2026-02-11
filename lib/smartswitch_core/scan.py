@@ -7,9 +7,12 @@ from smartswitch_core.additional_detect import (
     detect_call_log_root,
     detect_contacts_root,
     detect_media_root,
+    detect_settings_root,
+    detect_storage_root,
     detect_watch_root,
 )
 from smartswitch_core.applications.detect import detect_applications
+from smartswitch_core.category_grouping import group_unstructured_entries
 from smartswitch_core.messages.detect import detect_message_subitems
 from smartswitch_core.models import BackupInfo, Inventory, TreeItem
 from smartswitch_core.other_detect import detect_other_entries
@@ -117,7 +120,17 @@ def build_inventory(backup_dir: Path) -> Inventory:
     if call_log_root:
         roots.append(call_log_root)
 
-    other_root = detect_other_entries(backup_dir)
+    storage_entries, settings_entries, other_entries = group_unstructured_entries(backup_dir)
+
+    storage_root = detect_storage_root(backup_dir, storage_entries)
+    if storage_root:
+        roots.append(storage_root)
+
+    settings_root = detect_settings_root(backup_dir, settings_entries)
+    if settings_root:
+        roots.append(settings_root)
+
+    other_root = detect_other_entries(backup_dir, other_entries)
     if other_root:
         roots.append(other_root)
 

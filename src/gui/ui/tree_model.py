@@ -4,6 +4,7 @@ from PySide6.QtCore import QSortFilterProxyModel, Qt
 from PySide6.QtGui import QIcon, QStandardItem, QStandardItemModel
 
 from smartswitch_core.models import EnrichmentPatch, Inventory, TreeItem
+from gui.localization import translate_tree_header, translate_tree_label
 
 ROLE_ID = Qt.ItemDataRole.UserRole + 1
 ROLE_KIND = Qt.ItemDataRole.UserRole + 2
@@ -41,14 +42,14 @@ class TreeFilterProxyModel(QSortFilterProxyModel):
 class InventoryTreeModel(QStandardItemModel):
     def __init__(self) -> None:
         super().__init__()
-        self.setHorizontalHeaderLabels(["Backup Items"])
+        self.setHorizontalHeaderLabels([translate_tree_header("Backup Items")])
         self._item_by_id: dict[str, QStandardItem] = {}
         self._suspend = False
         self.itemChanged.connect(self._on_item_changed)
 
     def load_inventory(self, inventory: Inventory) -> None:
         self.clear()
-        self.setHorizontalHeaderLabels(["Backup Items"])
+        self.setHorizontalHeaderLabels([translate_tree_header("Backup Items")])
         self._item_by_id.clear()
 
         for root in inventory.roots:
@@ -82,7 +83,7 @@ class InventoryTreeModel(QStandardItemModel):
                 item.setIcon(QIcon(str(update.icon_path)))
 
     def _to_item(self, node: TreeItem) -> QStandardItem:
-        item = QStandardItem(node.label)
+        item = QStandardItem(translate_tree_label(node.kind, node.label))
         item.setCheckable(True)
         item.setEditable(False)
         item.setData(node.id, ROLE_ID)

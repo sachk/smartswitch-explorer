@@ -118,16 +118,24 @@ def export_media_directory(kind: str, backup_dir: Path, out_dir: Path) -> Export
         errors.append(f"Unsupported media kind: {kind}")
         return ExportResult(ok=False, outputs=outputs, warnings=warnings, errors=errors)
 
-    source_name = "PHOTO_ORIGIN" if kind == "photos" else "VIDEO_ORIGIN"
-    source_dir = backup_dir / source_name
+    source_names = ["Photo", "PHOTO_ORIGIN"] if kind == "photos" else ["Video", "VIDEO_ORIGIN"]
     target_dir = out_dir / "media" / kind
-    copied, local_outputs, local_warnings = _copy_tree(source_dir, target_dir)
-    outputs.extend(local_outputs)
-    warnings.extend(local_warnings)
+    per_source: dict[str, int] = {}
+    copied = 0
+
+    for source_name in source_names:
+        source_dir = backup_dir / source_name
+        source_target = target_dir / source_name
+        local_copied, local_outputs, local_warnings = _copy_tree(source_dir, source_target)
+        per_source[source_name] = local_copied
+        copied += local_copied
+        outputs.extend(local_outputs)
+        warnings.extend(local_warnings)
 
     manifest = {
         "kind": kind,
-        "source": str(source_dir),
+        "sources": source_names,
+        "copied_per_source": per_source,
         "copied_files": copied,
         "warnings": warnings,
         "errors": errors,

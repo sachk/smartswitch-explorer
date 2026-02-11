@@ -8,6 +8,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
+from gui.localization import setup_localization
 from gui.ui.main_window import MainWindow
 
 
@@ -16,6 +17,7 @@ def run_app() -> int:
     app.setOrganizationName("smartswitch-explorer")
     app.setApplicationName("smartswitch-explorer")
     app.setDesktopFileName("smartswitch-explorer")
+    setup_localization(app)
     icon_path = Path(__file__).resolve().parent / "assets" / "app_icon.png"
     if icon_path.exists():
         icon = QIcon(str(icon_path))

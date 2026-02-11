@@ -41,7 +41,7 @@ packages = [
 "smartswitch_core.messages" = "lib/smartswitch_core/messages"
 
 [tool.setuptools.package-data]
-"gui" = ["assets/*.png"]
+"gui" = ["assets/*.png", "translations/*.ts", "translations/*.qm"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
