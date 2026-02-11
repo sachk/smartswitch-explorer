@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import zipfile
 
 from smartswitch_core.metadata import enrich_inventory
 from smartswitch_core.scan import build_inventory, find_backups
@@ -34,6 +35,22 @@ def test_find_backups_and_build_inventory(tmp_path: Path) -> None:
 
     assert len(labels["Application Data"].children) == 1
     assert len(labels["Application APKs"].children) == 1
+
+
+def test_message_subitems_detected_from_smem_only(tmp_path: Path) -> None:
+    backup = tmp_path / "SM-F946B_20260201210657"
+    message = backup / "MESSAGE"
+    message.mkdir(parents=True)
+
+    with zipfile.ZipFile(message / "Message.smem", mode="w") as zf:
+        zf.writestr("!@ssm@!sms_restore.bk", b"x")
+        zf.writestr("!@ssm@!mms_restore.bk", b"x")
+        zf.writestr("!@ssm@!PART_1_image000000.jpg", b"x")
+        zf.writestr("!@ssm@!RCSMESSAGE!@ssm@!RcsMessage.edb", b"x")
+
+    inv = build_inventory(backup)
+    msg_children = {child.label for child in inv.roots[0].children}
+    assert msg_children == {"SMS", "MMS", "Attachments", "RCS"}
 
 
 def test_metadata_enrichment(tmp_path: Path) -> None:

@@ -22,8 +22,9 @@ def detect_message_subitems(backup_dir: Path) -> list[TreeItem]:
         return []
 
     local_names = {p.name for p in message_dir.iterdir() if p.is_file()}
-    if not local_names and (message_dir / "Message.smem").exists():
-        local_names = set(_entry_names_from_smem(message_dir / "Message.smem"))
+    smem_path = message_dir / "Message.smem"
+    if smem_path.exists():
+        local_names.update(_entry_names_from_smem(smem_path))
 
     has_sms = any(name.endswith("sms_restore.bk") for name in local_names)
     has_mms = any(name.endswith("mms_restore.bk") for name in local_names)
