@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "smartswitch-explorer"
 version = "0.1.0"
-description = "Desktop Smart Switch backup explorer for applications and messages"
+description = "Desktop Smart Switch backup explorer and exporter"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

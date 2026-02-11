@@ -6,6 +6,10 @@ Native desktop app (PySide6 + Qt widgets) for exploring Samsung Smart Switch bac
 
 - Messages
 - Applications
+- Photos and videos
+- Galaxy Watch backups
+- Contacts
+- Call log
 
 ## Key behavior
 

@@ -3,6 +3,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from smartswitch_core.additional_detect import (
+    detect_call_log_root,
+    detect_contacts_root,
+    detect_media_root,
+    detect_watch_root,
+)
 from smartswitch_core.applications.detect import detect_applications
 from smartswitch_core.messages.detect import detect_message_subitems
 from smartswitch_core.models import BackupInfo, Inventory, TreeItem
@@ -92,4 +98,22 @@ def build_inventory(backup_dir: Path) -> Inventory:
         children=apk_items,
     )
 
-    return Inventory(backup=backup, roots=[message_root, app_data_root, app_apk_root])
+    roots: list[TreeItem] = [message_root, app_data_root, app_apk_root]
+
+    media_root = detect_media_root(backup_dir)
+    if media_root:
+        roots.append(media_root)
+
+    watch_root = detect_watch_root(backup_dir)
+    if watch_root:
+        roots.append(watch_root)
+
+    contacts_root = detect_contacts_root(backup_dir)
+    if contacts_root:
+        roots.append(contacts_root)
+
+    call_log_root = detect_call_log_root(backup_dir)
+    if call_log_root:
+        roots.append(call_log_root)
+
+    return Inventory(backup=backup, roots=roots)
