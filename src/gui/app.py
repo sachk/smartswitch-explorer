@@ -13,6 +13,9 @@ from gui.ui.main_window import MainWindow
 
 def run_app() -> int:
     app = QApplication(sys.argv)
+    app.setOrganizationName("smartswitch-explorer")
+    app.setApplicationName("smartswitch-explorer")
+    app.setDesktopFileName("smartswitch-explorer")
     icon_path = Path(__file__).resolve().parent / "assets" / "app_icon.png"
     if icon_path.exists():
         icon = QIcon(str(icon_path))

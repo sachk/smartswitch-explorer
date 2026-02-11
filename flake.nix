@@ -52,7 +52,7 @@
           unset SOURCE_DATE_EPOCH
           export LD_LIBRARY_PATH=${pkgs.libGL}
           export LD_LIBRARY_PATH=${ldLibraryPath}:''${LD_LIBRARY_PATH:-}
-          export QT_QPA_PLATFORM=''${QT_QPA_PLATFORM:-xcb}
+          export QT_QPA_PLATFORM=xcb
           unset QT_PLUGIN_PATH
           unset QML2_IMPORT_PATH
 
@@ -96,7 +96,7 @@
           export LD_LIBRARY_PATH=${pkgs.libGL}
           # full runtime search path for Qt/OpenGL/X11 libs
           export LD_LIBRARY_PATH=${ldLibraryPath}:''${LD_LIBRARY_PATH:-}
-          export QT_QPA_PLATFORM=''${QT_QPA_PLATFORM:-xcb}
+          export QT_QPA_PLATFORM=xcb
           unset QT_PLUGIN_PATH
           unset QML2_IMPORT_PATH
 
