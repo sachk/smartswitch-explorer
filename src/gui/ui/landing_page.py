@@ -29,6 +29,7 @@ class LandingPage(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
+        self._recent_backup_hints: list[Path] = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -146,11 +147,36 @@ class LandingPage(QWidget):
         self.refresh_button.clicked.connect(self.refresh)
         self.backup_list.itemDoubleClicked.connect(self._open_list_item)
 
+    def set_recent_backups(self, paths: list[Path]) -> None:
+        self._recent_backup_hints = [path.expanduser() for path in paths]
+
+    def set_path_text(self, path: Path) -> None:
+        self.path_input.setText(str(path.expanduser()))
+
     def refresh(self) -> None:
         self.backup_list.clear()
         count = 0
+        seen: set[Path] = set()
+
+        for hint in self._recent_backup_hints:
+            if not hint.exists():
+                continue
+            for backup in find_backups(hint):
+                resolved = backup.path.resolve()
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
+                item = QListWidgetItem(f"{backup.backup_id}  ({backup.path})")
+                item.setData(Qt.ItemDataRole.UserRole, str(backup.path))
+                self.backup_list.addItem(item)
+                count += 1
+
         for root in discover_backup_roots():
             for backup in find_backups(root):
+                resolved = backup.path.resolve()
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
                 item = QListWidgetItem(f"{backup.backup_id}  ({backup.path})")
                 item.setData(Qt.ItemDataRole.UserRole, str(backup.path))
                 self.backup_list.addItem(item)

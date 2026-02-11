@@ -39,13 +39,13 @@ class MainWindow(QMainWindow):
         self.landing_page.backup_selected.connect(self._open_backup)
         self.explorer_page.run_action_requested.connect(self._run_action)
 
-        self.landing_page.refresh()
-
         last_backup = self.settings.get("last_backup")
         if last_backup:
             last = Path(last_backup)
-            if is_backup_dir(last):
-                self._open_backup(last)
+            self.landing_page.set_recent_backups([last])
+            self.landing_page.set_path_text(last)
+
+        self.landing_page.refresh()
 
     def _open_backup(self, selected_path: Path) -> None:
         backup_dir = selected_path
@@ -63,6 +63,8 @@ class MainWindow(QMainWindow):
 
         self.settings["last_backup"] = str(backup_dir)
         save_settings(self.settings)
+        self.landing_page.set_recent_backups([backup_dir])
+        self.landing_page.set_path_text(backup_dir)
 
         worker = FunctionWorker(enrich_inventory, backup_dir, inventory)
         worker.signals.result.connect(self.explorer_page.apply_patch)
