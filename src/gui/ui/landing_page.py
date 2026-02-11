@@ -28,6 +28,14 @@ from PySide6.QtWidgets import (
 from smartswitch_core.scan import discover_backup_roots, find_backups
 
 
+class BackupListWidget(QListWidget):
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        if self.itemAt(event.pos()) is None:
+            self.clearSelection()
+            self.setCurrentItem(None)
+        super().mousePressEvent(event)
+
+
 def _backup_title_and_model(backup_dir: Path) -> tuple[str, str]:
     display_name = ""
     model_name = ""
@@ -82,17 +90,23 @@ class BackupListItemWidget(QWidget):
         outer.setContentsMargins(10, 8, 10, 8)
         outer.setSpacing(10)
 
-        icon_label = QLabel()
-        icon_label.setFixedSize(44, 44)
-        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.icon_label = QLabel()
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon_path = _backup_icon_path(backup_dir)
-        pixmap = QPixmap(str(icon_path)) if icon_path else QPixmap()
-        if not pixmap.isNull():
-            icon_label.setPixmap(pixmap.scaled(40, 40, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        raw_icon = QPixmap(str(icon_path)) if icon_path else QPixmap()
+        if not raw_icon.isNull():
+            self._icon_source = raw_icon
         else:
             fallback = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
-            icon_label.setPixmap(fallback.pixmap(34, 34))
-        outer.addWidget(icon_label, alignment=Qt.AlignmentFlag.AlignTop)
+            self._icon_source = fallback.pixmap(128, 128)
+
+        icon_col = QVBoxLayout()
+        icon_col.setContentsMargins(0, 0, 0, 0)
+        icon_col.setSpacing(0)
+        icon_col.addStretch(1)
+        icon_col.addWidget(self.icon_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        icon_col.addStretch(1)
+        outer.addLayout(icon_col)
 
         content = QVBoxLayout()
         content.setContentsMargins(0, 0, 0, 0)
@@ -104,12 +118,29 @@ class BackupListItemWidget(QWidget):
 
         path_label = QLabel(textwrap.fill(str(backup_dir), width=80))
         path_label.setWordWrap(True)
-        path_label.setStyleSheet("font-size: 12px; color: palette(mid);")
+        path_label.setStyleSheet("font-size: 12px;")
         path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         content.addWidget(path_label)
         content.addItem(QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
 
         outer.addLayout(content, 1)
+        self._apply_icon_size()
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._apply_icon_size()
+
+    def _apply_icon_size(self) -> None:
+        size = max(28, int(self.height() * 0.7))
+        self.icon_label.setFixedSize(size, size)
+        self.icon_label.setPixmap(
+            self._icon_source.scaled(
+                size - 4,
+                size - 4,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
 
 
 class LandingPage(QWidget):
@@ -196,7 +227,7 @@ class LandingPage(QWidget):
         host_layout.setContentsMargins(0, 0, 0, 0)
         host_layout.setSpacing(0)
 
-        self.backup_list = QListWidget(self.list_host)
+        self.backup_list = BackupListWidget(self.list_host)
         self.backup_list.setAlternatingRowColors(True)
         host_layout.addWidget(self.backup_list, 0, 0)
 
@@ -214,7 +245,7 @@ class LandingPage(QWidget):
         self.empty_label = QLabel("No backups detected")
         self.empty_label.setWordWrap(True)
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_label.setStyleSheet("font-size: 24px; font-weight: 600; color: white;")
+        self.empty_label.setStyleSheet("font-size: 24px; font-weight: 600; color: palette(text);")
         self.empty_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         empty_row.addWidget(self.empty_label, 70)
 
@@ -283,7 +314,7 @@ class LandingPage(QWidget):
                 item = QListWidgetItem()
                 item.setData(Qt.ItemDataRole.UserRole, str(backup.path))
                 row = BackupListItemWidget(backup.path, self.backup_list)
-                item.setSizeHint(row.sizeHint())
+                item.setSizeHint(QSize(row.sizeHint().width(), max(80, row.sizeHint().height())))
                 self.backup_list.addItem(item)
                 self.backup_list.setItemWidget(item, row)
                 count += 1
@@ -297,7 +328,7 @@ class LandingPage(QWidget):
                 item = QListWidgetItem()
                 item.setData(Qt.ItemDataRole.UserRole, str(backup.path))
                 row = BackupListItemWidget(backup.path, self.backup_list)
-                item.setSizeHint(row.sizeHint())
+                item.setSizeHint(QSize(row.sizeHint().width(), max(80, row.sizeHint().height())))
                 self.backup_list.addItem(item)
                 self.backup_list.setItemWidget(item, row)
                 count += 1
