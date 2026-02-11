@@ -13,10 +13,11 @@ dependencies = [
   "pycryptodome>=3.20",
 ]
 
-[project.optional-dependencies]
-dev = [
-  "pytest>=8.2",
-]
+[dependency-groups]
+dev = ["pytest>=8.2"]
+
+[tool.uv]
+default-groups = ["dev"]
 
 [project.scripts]
 smartswitch-explorer = "gui.main:main"
@@ -30,14 +31,14 @@ packages = [
   "smartswitch_core.crypto",
   "smartswitch_core.messages",
 ]
-package-dir = {
-  "gui" = "src/gui",
-  "gui.ui" = "src/gui/ui",
-  "smartswitch_core" = "lib/smartswitch_core",
-  "smartswitch_core.applications" = "lib/smartswitch_core/applications",
-  "smartswitch_core.crypto" = "lib/smartswitch_core/crypto",
-  "smartswitch_core.messages" = "lib/smartswitch_core/messages",
-}
+
+[tool.setuptools.package-dir]
+"gui" = "src/gui"
+"gui.ui" = "src/gui/ui"
+"smartswitch_core" = "lib/smartswitch_core"
+"smartswitch_core.applications" = "lib/smartswitch_core/applications"
+"smartswitch_core.crypto" = "lib/smartswitch_core/crypto"
+"smartswitch_core.messages" = "lib/smartswitch_core/messages"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
