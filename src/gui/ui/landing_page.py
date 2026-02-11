@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+import textwrap
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QAction, QIcon
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -15,6 +18,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QSizePolicy,
+    QSpacerItem,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -22,6 +26,90 @@ from PySide6.QtWidgets import (
 )
 
 from smartswitch_core.scan import discover_backup_roots, find_backups
+
+
+def _backup_title_and_model(backup_dir: Path) -> tuple[str, str]:
+    display_name = ""
+    model_name = ""
+
+    json_path = backup_dir / "SmartSwitchBackup.json"
+    if json_path.exists():
+        try:
+            obj = json.loads(json_path.read_text(encoding="utf-8"))
+            display_name = str(obj.get("DisplayName") or obj.get("BrandName") or "").strip()
+            model_name = str(obj.get("ModelName") or "").strip()
+        except (OSError, ValueError):
+            pass
+
+    if not display_name or not model_name:
+        xml_path = backup_dir / "backupHistoryInfo.xml"
+        if xml_path.exists():
+            try:
+                root = ET.fromstring(xml_path.read_text(encoding="utf-8"))
+                ns = {"k": "Kies.Common.Data"}
+                if not display_name:
+                    display_name = (root.findtext(".//k:UserInputName", namespaces=ns) or "").strip()
+                if not model_name:
+                    model_name = (root.findtext(".//k:ModelName", namespaces=ns) or "").strip()
+            except (OSError, ValueError, ET.ParseError):
+                pass
+
+    if not display_name:
+        display_name = backup_dir.name
+    return display_name, model_name
+
+
+def _backup_icon_path(backup_dir: Path) -> Path | None:
+    candidates = [
+        backup_dir / "CATEGORY_ICON" / "com.sec.android.easyMover",
+        backup_dir / "CATEGORY_ICON" / "com.samsung.android.messaging",
+        backup_dir / "APKFILE" / "com.sec.android.easyMover.png",
+        backup_dir / "APKFILE" / "com.samsung.android.messaging.png",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+class BackupListItemWidget(QWidget):
+    def __init__(self, backup_dir: Path, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        display_name, model_name = _backup_title_and_model(backup_dir)
+        title = f"{display_name} ({model_name})" if model_name else display_name
+
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(10, 8, 10, 8)
+        outer.setSpacing(10)
+
+        icon_label = QLabel()
+        icon_label.setFixedSize(44, 44)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_path = _backup_icon_path(backup_dir)
+        pixmap = QPixmap(str(icon_path)) if icon_path else QPixmap()
+        if not pixmap.isNull():
+            icon_label.setPixmap(pixmap.scaled(40, 40, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        else:
+            fallback = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+            icon_label.setPixmap(fallback.pixmap(34, 34))
+        outer.addWidget(icon_label, alignment=Qt.AlignmentFlag.AlignTop)
+
+        content = QVBoxLayout()
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(2)
+
+        title_label = QLabel(title)
+        title_label.setStyleSheet("font-size: 16px; font-weight: 700;")
+        content.addWidget(title_label)
+
+        path_label = QLabel(textwrap.fill(str(backup_dir), width=80))
+        path_label.setWordWrap(True)
+        path_label.setStyleSheet("font-size: 12px; color: palette(mid);")
+        path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        content.addWidget(path_label)
+        content.addItem(QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
+
+        outer.addLayout(content, 1)
 
 
 class LandingPage(QWidget):
@@ -55,23 +143,48 @@ class LandingPage(QWidget):
         header_row.addWidget(subtitle, 1, alignment=Qt.AlignmentFlag.AlignVCenter)
         layout.addLayout(header_row)
 
+        selector_divider = QFrame()
+        selector_divider.setFrameShape(QFrame.Shape.HLine)
+        selector_divider.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(selector_divider)
+
+        picker_row = QHBoxLayout()
+        picker_row.setSpacing(6)
+
         self.path_input = QLineEdit()
         self.path_input.setPlaceholderText("Select a backup folder")
         self.path_input.setMinimumHeight(42)
-        self.path_input.setStyleSheet("font-size: 14px; padding-right: 8px;")
-
-        open_icon = QIcon.fromTheme("folder-open")
-        if open_icon.isNull():
-            open_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon)
-        self.open_action = QAction(open_icon, "Open folder", self.path_input)
-        self.open_action.triggered.connect(self._open_folder_dialog)
-        self.path_input.addAction(self.open_action, QLineEdit.ActionPosition.TrailingPosition)
+        self.path_input.setStyleSheet("font-size: 14px;")
         self.path_input.returnPressed.connect(self._open_path_from_input)
-        layout.addWidget(self.path_input)
+        picker_row.addWidget(self.path_input, 1)
+
+        self.open_folder_button = QToolButton()
+        self.open_folder_button.setFixedSize(QSize(42, 42))
+        self.open_folder_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
+        self.open_folder_button.setIconSize(QSize(20, 20))
+        self.open_folder_button.setToolTip("Open folder chooser")
+        self.open_folder_button.setAutoRaise(False)
+        self.open_folder_button.setStyleSheet(
+            "QToolButton {"
+            "  border: 1px solid palette(mid);"
+            "  border-radius: 8px;"
+            "  background-color: palette(button);"
+            "  color: palette(button-text);"
+            "}"
+            "QToolButton:hover {"
+            "  border-color: palette(highlight);"
+            "  background-color: palette(light);"
+            "}"
+            "QToolButton:pressed {"
+            "  background-color: palette(midlight);"
+            "}"
+        )
+        picker_row.addWidget(self.open_folder_button)
+        layout.addLayout(picker_row)
 
         self.backup_group = QGroupBox("Detected Backups")
         self.backup_group.setStyleSheet(
-            "QGroupBox { font-size: 18px; font-weight: 600; }"
+            "QGroupBox { font-size: 20px; font-weight: 600; }"
             "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
         )
         group_layout = QVBoxLayout(self.backup_group)
@@ -144,6 +257,7 @@ class LandingPage(QWidget):
 
         layout.addWidget(self.backup_group, 1)
 
+        self.open_folder_button.clicked.connect(self._open_folder_dialog)
         self.refresh_button.clicked.connect(self.refresh)
         self.backup_list.itemDoubleClicked.connect(self._open_list_item)
 
@@ -166,9 +280,12 @@ class LandingPage(QWidget):
                 if resolved in seen:
                     continue
                 seen.add(resolved)
-                item = QListWidgetItem(f"{backup.backup_id}  ({backup.path})")
+                item = QListWidgetItem()
                 item.setData(Qt.ItemDataRole.UserRole, str(backup.path))
+                row = BackupListItemWidget(backup.path, self.backup_list)
+                item.setSizeHint(row.sizeHint())
                 self.backup_list.addItem(item)
+                self.backup_list.setItemWidget(item, row)
                 count += 1
 
         for root in discover_backup_roots():
@@ -177,9 +294,12 @@ class LandingPage(QWidget):
                 if resolved in seen:
                     continue
                 seen.add(resolved)
-                item = QListWidgetItem(f"{backup.backup_id}  ({backup.path})")
+                item = QListWidgetItem()
                 item.setData(Qt.ItemDataRole.UserRole, str(backup.path))
+                row = BackupListItemWidget(backup.path, self.backup_list)
+                item.setSizeHint(row.sizeHint())
                 self.backup_list.addItem(item)
+                self.backup_list.setItemWidget(item, row)
                 count += 1
 
         if count == 0:
