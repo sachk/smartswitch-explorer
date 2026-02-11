@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QModelIndex, QRect, Signal, Qt
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -45,13 +45,26 @@ class ModernTreeCheckDelegate(QStyledItemDelegate):
         text_x = opt.rect.x() + 8
         if has_check:
             check_rect = self._checkbox_rect(opt)
-            border = opt.palette.color(opt.palette.ColorRole.Midlight)
-            fill = opt.palette.color(opt.palette.ColorRole.Base)
+            base = opt.palette.color(opt.palette.ColorRole.Base)
+            text = opt.palette.color(opt.palette.ColorRole.Text)
+            is_dark = base.lightness() < 128
+
+            fill = QColor(text)
+            border = QColor(text)
+            if is_dark:
+                fill.setAlpha(235)
+                border.setAlpha(180)
+            else:
+                fill.setAlpha(215)
+                border.setAlpha(165)
             if check_state == Qt.CheckState.Checked:
                 fill = opt.palette.color(opt.palette.ColorRole.Highlight)
                 border = opt.palette.color(opt.palette.ColorRole.HighlightedText)
             elif check_state == Qt.CheckState.PartiallyChecked:
-                fill = opt.palette.color(opt.palette.ColorRole.AlternateBase)
+                fill = QColor(opt.palette.color(opt.palette.ColorRole.Highlight))
+                fill.setAlpha(170)
+                border = QColor(opt.palette.color(opt.palette.ColorRole.HighlightedText))
+                border.setAlpha(190)
 
             painter.save()
             painter.setRenderHint(painter.RenderHint.Antialiasing, True)
