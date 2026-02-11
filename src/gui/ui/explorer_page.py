@@ -5,10 +5,12 @@ from pathlib import Path
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QToolButton,
     QTreeView,
@@ -17,11 +19,12 @@ from PySide6.QtWidgets import (
 )
 
 from smartswitch_core.models import EnrichmentPatch, Inventory
+from gui.ui.export_options_dialog import ExportOptionsDialog
 from gui.ui.tree_model import InventoryTreeModel, TreeFilterProxyModel
 
 
 class ExplorerPage(QWidget):
-    run_action_requested = Signal(str, list, Path)
+    run_action_requested = Signal(dict, list, Path)
 
     def __init__(self) -> None:
         super().__init__()
@@ -66,12 +69,9 @@ class ExplorerPage(QWidget):
         layout.addWidget(self.tree, 1)
 
         actions = QHBoxLayout()
-        self.decrypt_button = QPushButton("Decrypt Selected")
-        self.extract_button = QPushButton("Extract Selected")
-        self.both_button = QPushButton("Decrypt + Extract Selected")
-        actions.addWidget(self.decrypt_button)
-        actions.addWidget(self.extract_button)
-        actions.addWidget(self.both_button)
+        self.export_button = QPushButton("Export Selected")
+        self.export_button.setMinimumHeight(40)
+        actions.addWidget(self.export_button)
         layout.addLayout(actions)
 
         self.search.textChanged.connect(self._apply_search)
@@ -79,9 +79,7 @@ class ExplorerPage(QWidget):
         self.expand_all_button.clicked.connect(self.tree.expandAll)
         self.collapse_all_button.clicked.connect(self.tree.collapseAll)
 
-        self.decrypt_button.clicked.connect(lambda: self._emit_action("decrypt"))
-        self.extract_button.clicked.connect(lambda: self._emit_action("extract"))
-        self.both_button.clicked.connect(lambda: self._emit_action("both"))
+        self.export_button.clicked.connect(self._emit_action)
 
         clear_action = QAction("Clear", self)
         clear_action.triggered.connect(lambda: self.search.setText(""))
@@ -104,9 +102,7 @@ class ExplorerPage(QWidget):
         self.model.apply_patch(patch)
 
     def set_busy(self, busy: bool) -> None:
-        self.decrypt_button.setDisabled(busy)
-        self.extract_button.setDisabled(busy)
-        self.both_button.setDisabled(busy)
+        self.export_button.setDisabled(busy)
 
     def _apply_search(self, text: str) -> None:
         self.proxy.setFilterFixedString(text)
@@ -116,6 +112,17 @@ class ExplorerPage(QWidget):
         if path:
             self.destination.setText(path)
 
-    def _emit_action(self, mode: str) -> None:
+    def _emit_action(self) -> None:
         selected = self.model.checked_leaf_nodes()
-        self.run_action_requested.emit(mode, selected, self.destination_path())
+        if not selected:
+            QMessageBox.information(self, "Nothing selected", "Select at least one item to export.")
+            return
+
+        has_messages = any(node["kind"] == "message_subitem" for node in selected)
+        has_apps = any(node["kind"] in {"app_data", "app_apk"} for node in selected)
+
+        dialog = ExportOptionsDialog(has_messages=has_messages, has_apps=has_apps, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        self.run_action_requested.emit(dialog.options(), selected, self.destination_path())

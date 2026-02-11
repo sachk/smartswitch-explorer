@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import shutil
 import zipfile
@@ -122,11 +123,35 @@ def _decrypt_bk_json(raw: bytes, dummy_hex: str) -> list[dict] | dict:
     return json.loads(payload.decode("utf-8"))
 
 
+def _write_rows_csv(payload: list[dict] | dict, target: Path) -> None:
+    if isinstance(payload, dict):
+        payload = [payload]
+
+    rows = [row for row in payload if isinstance(row, dict)] if isinstance(payload, list) else []
+    if not rows:
+        target.write_text("payload\n", encoding="utf-8")
+        return
+
+    columns: list[str] = []
+    for row in rows:
+        for key in row.keys():
+            name = str(key)
+            if name not in columns:
+                columns.append(name)
+
+    with target.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({col: row.get(col, "") for col in columns})
+
+
 def decode_and_export_messages(
     backup_dir: Path,
     out_dir: Path,
     selected_parts: set[str],
     *,
+    message_format: str = "json",
     dummy_hex: str = DEFAULT_DUMMY_HEX,
     include_decrypt: bool = True,
     include_extract: bool = True,
@@ -139,16 +164,33 @@ def decode_and_export_messages(
     out_dir.mkdir(parents=True, exist_ok=True)
     message_out = out_dir / "messages"
     message_out.mkdir(parents=True, exist_ok=True)
+    normalized_format = message_format.lower().strip()
+    if normalized_format not in {"json", "csv", "native"}:
+        warnings.append(f"Unknown message format '{message_format}', defaulting to json")
+        normalized_format = "json"
 
     manifest = {
         "selected_parts": sorted(selected_parts),
+        "message_format": normalized_format,
         "decoded": {},
         "copied": {},
         "warnings": warnings,
         "errors": errors,
     }
 
-    if "sms" in selected_parts and include_decrypt:
+    if "sms" in selected_parts and normalized_format == "native":
+        sms_entry = source.read_first(lambda name: name.endswith("sms_restore.bk"))
+        if sms_entry is None:
+            warnings.append("sms_restore.bk not found")
+        else:
+            name, raw = sms_entry
+            native_dir = message_out / "native"
+            native_dir.mkdir(parents=True, exist_ok=True)
+            target = native_dir / Path(name).name
+            target.write_bytes(raw)
+            outputs.append(target)
+            manifest["copied"]["sms_native"] = 1
+    elif "sms" in selected_parts and include_decrypt:
         sms_entry = source.read_first(lambda name: name.endswith("sms_restore.bk"))
         if sms_entry is None:
             warnings.append("sms_restore.bk not found")
@@ -156,14 +198,29 @@ def decode_and_export_messages(
             _, raw = sms_entry
             try:
                 sms_json = _decrypt_bk_json(raw, dummy_hex)
-                sms_path = message_out / "sms.json"
-                sms_path.write_text(json.dumps(sms_json, ensure_ascii=False, indent=2), encoding="utf-8")
+                sms_path = message_out / ("sms.csv" if normalized_format == "csv" else "sms.json")
+                if normalized_format == "csv":
+                    _write_rows_csv(sms_json, sms_path)
+                else:
+                    sms_path.write_text(json.dumps(sms_json, ensure_ascii=False, indent=2), encoding="utf-8")
                 outputs.append(sms_path)
                 manifest["decoded"]["sms"] = len(sms_json) if isinstance(sms_json, list) else 1
             except (ValueError, json.JSONDecodeError) as exc:
                 warnings.append(f"SMS decode failed: {exc}")
 
-    if "mms" in selected_parts and include_decrypt:
+    if "mms" in selected_parts and normalized_format == "native":
+        mms_entry = source.read_first(lambda name: name.endswith("mms_restore.bk"))
+        if mms_entry is None:
+            warnings.append("mms_restore.bk not found")
+        else:
+            name, raw = mms_entry
+            native_dir = message_out / "native"
+            native_dir.mkdir(parents=True, exist_ok=True)
+            target = native_dir / Path(name).name
+            target.write_bytes(raw)
+            outputs.append(target)
+            manifest["copied"]["mms_native"] = 1
+    elif "mms" in selected_parts and include_decrypt:
         mms_entry = source.read_first(lambda name: name.endswith("mms_restore.bk"))
         if mms_entry is None:
             warnings.append("mms_restore.bk not found")
@@ -171,8 +228,11 @@ def decode_and_export_messages(
             _, raw = mms_entry
             try:
                 mms_json = _decrypt_bk_json(raw, dummy_hex)
-                mms_path = message_out / "mms.json"
-                mms_path.write_text(json.dumps(mms_json, ensure_ascii=False, indent=2), encoding="utf-8")
+                mms_path = message_out / ("mms.csv" if normalized_format == "csv" else "mms.json")
+                if normalized_format == "csv":
+                    _write_rows_csv(mms_json, mms_path)
+                else:
+                    mms_path.write_text(json.dumps(mms_json, ensure_ascii=False, indent=2), encoding="utf-8")
                 outputs.append(mms_path)
                 manifest["decoded"]["mms"] = len(mms_json) if isinstance(mms_json, list) else 1
             except (ValueError, json.JSONDecodeError) as exc:

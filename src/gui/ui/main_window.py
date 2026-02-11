@@ -71,7 +71,7 @@ class MainWindow(QMainWindow):
         worker.signals.error.connect(self._show_error)
         self.thread_pool.start(worker)
 
-    def _run_action(self, mode: str, selected_nodes: list[dict], destination: Path) -> None:
+    def _run_action(self, options: dict, selected_nodes: list[dict], destination: Path) -> None:
         if not selected_nodes:
             QMessageBox.information(self, "Nothing selected", "Select at least one item to process.")
             return
@@ -83,17 +83,13 @@ class MainWindow(QMainWindow):
         self.settings["destination"] = str(destination)
         save_settings(self.settings)
 
-        include_decrypt = mode in {"decrypt", "both"}
-        include_extract = mode in {"extract", "both"}
-
         self.explorer_page.set_busy(True)
         worker = FunctionWorker(
             self._execute_actions,
             self.current_backup,
             destination,
             selected_nodes,
-            include_decrypt,
-            include_extract,
+            options,
         )
         worker.signals.result.connect(self._handle_action_result)
         worker.signals.error.connect(self._handle_action_error)
@@ -104,13 +100,17 @@ class MainWindow(QMainWindow):
         backup_dir: Path,
         destination: Path,
         selected_nodes: list[dict],
-        include_decrypt: bool,
-        include_extract: bool,
+        options: dict,
     ) -> dict:
         export_root = make_export_root(destination, backup_dir.name)
         warnings: list[str] = []
         errors: list[str] = []
         outputs: list[str] = []
+
+        messages_format = str(options.get("messages_format", "json"))
+        apps_mode = str(options.get("apps_mode", "extract"))
+        apps_include_decrypt = apps_mode in {"decrypt", "both"}
+        apps_include_extract = apps_mode in {"extract", "both"}
 
         message_parts = {
             node["id"].split(":", 1)[1]
@@ -123,8 +123,9 @@ class MainWindow(QMainWindow):
                 backup_dir,
                 export_root,
                 message_parts,
-                include_decrypt=include_decrypt,
-                include_extract=include_extract,
+                message_format=messages_format,
+                include_decrypt=messages_format in {"json", "csv"},
+                include_extract=True,
             )
             warnings.extend(result.warnings)
             errors.extend(result.errors)
@@ -151,8 +152,8 @@ class MainWindow(QMainWindow):
                 mode,
                 backup_dir,
                 export_root / "applications",
-                include_decrypt=include_decrypt,
-                include_extract=include_extract,
+                include_decrypt=apps_include_decrypt,
+                include_extract=apps_include_extract,
             )
             warnings.extend(result.warnings)
             errors.extend(result.errors)
