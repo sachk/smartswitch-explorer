@@ -16,7 +16,7 @@ Native desktop app (PySide6 + Qt widgets) for exploring Samsung Smart Switch bac
 
 ## Layout
 
-- `src/webapp`: GUI app code.
+- `src/gui`: GUI app code.
 - `lib/smartswitch_core`: reusable scanning/decode/extract libraries.
 
 ## Setup

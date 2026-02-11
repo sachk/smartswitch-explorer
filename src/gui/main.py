@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from webapp.app import run_app
+from gui.app import run_app
 
 
 def main() -> int:

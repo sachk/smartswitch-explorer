@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from smartswitch_core.models import EnrichmentPatch, Inventory
-from webapp.ui.tree_model import InventoryTreeModel, TreeFilterProxyModel
+from gui.ui.tree_model import InventoryTreeModel, TreeFilterProxyModel
 
 
 class ExplorerPage(QWidget):

@@ -19,13 +19,25 @@ dev = [
 ]
 
 [project.scripts]
-smartswitch-explorer = "webapp.main:main"
+smartswitch-explorer = "gui.main:main"
 
 [tool.setuptools]
-package-dir = {"" = "."}
-
-[tool.setuptools.packages.find]
-where = ["src", "lib"]
+packages = [
+  "gui",
+  "gui.ui",
+  "smartswitch_core",
+  "smartswitch_core.applications",
+  "smartswitch_core.crypto",
+  "smartswitch_core.messages",
+]
+package-dir = {
+  "gui" = "src/gui",
+  "gui.ui" = "src/gui/ui",
+  "smartswitch_core" = "lib/smartswitch_core",
+  "smartswitch_core.applications" = "lib/smartswitch_core/applications",
+  "smartswitch_core.crypto" = "lib/smartswitch_core/crypto",
+  "smartswitch_core.messages" = "lib/smartswitch_core/messages",
+}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

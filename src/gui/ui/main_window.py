@@ -10,10 +10,10 @@ from smartswitch_core.export import make_export_root
 from smartswitch_core.messages.decode import decode_and_export_messages
 from smartswitch_core.metadata import enrich_inventory
 from smartswitch_core.scan import build_inventory, find_backups, is_backup_dir
-from webapp.config import load_settings, save_settings
-from webapp.ui.explorer_page import ExplorerPage
-from webapp.ui.landing_page import LandingPage
-from webapp.ui.workers import FunctionWorker
+from gui.config import load_settings, save_settings
+from gui.ui.explorer_page import ExplorerPage
+from gui.ui.landing_page import LandingPage
+from gui.ui.workers import FunctionWorker
 
 
 class MainWindow(QMainWindow):

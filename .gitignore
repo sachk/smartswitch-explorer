@@ -4,3 +4,5 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 *.swp
+
+smartswitch_explorer.egg-info/

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QApplication
 
-from webapp.ui.main_window import MainWindow
+from gui.ui.main_window import MainWindow
 
 
 def run_app() -> int:
