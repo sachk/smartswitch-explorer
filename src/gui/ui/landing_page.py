@@ -6,7 +6,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtGui import QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -179,7 +179,9 @@ class LandingPage(QWidget):
         selector_divider.setFrameShadow(QFrame.Shadow.Sunken)
         layout.addWidget(selector_divider)
 
-        picker_row = QHBoxLayout()
+        picker_host = QWidget()
+        picker_row = QHBoxLayout(picker_host)
+        picker_row.setContentsMargins(10, 0, 10, 0)
         picker_row.setSpacing(6)
 
         self.path_input = QLineEdit()
@@ -191,27 +193,15 @@ class LandingPage(QWidget):
 
         self.open_folder_button = QToolButton()
         self.open_folder_button.setFixedSize(QSize(42, 42))
-        self.open_folder_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
+        self.open_folder_button.setIcon(
+            self._icon_for_button(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon), QSize(20, 20))
+        )
         self.open_folder_button.setIconSize(QSize(20, 20))
         self.open_folder_button.setToolTip("Open folder chooser")
         self.open_folder_button.setAutoRaise(False)
-        self.open_folder_button.setStyleSheet(
-            "QToolButton {"
-            "  border: 1px solid palette(mid);"
-            "  border-radius: 8px;"
-            "  background-color: palette(button);"
-            "  color: palette(button-text);"
-            "}"
-            "QToolButton:hover {"
-            "  border-color: palette(highlight);"
-            "  background-color: palette(light);"
-            "}"
-            "QToolButton:pressed {"
-            "  background-color: palette(midlight);"
-            "}"
-        )
+        self.open_folder_button.setStyleSheet(self._contrast_button_stylesheet(radius=8))
         picker_row.addWidget(self.open_folder_button)
-        layout.addLayout(picker_row)
+        layout.addWidget(picker_host)
 
         self.backup_group = QGroupBox("Detected Backups")
         self.backup_group.setStyleSheet(
@@ -255,26 +245,13 @@ class LandingPage(QWidget):
         host_layout.addWidget(self.empty_state, 0, 0)
 
         self.refresh_button = QToolButton()
-        icon = QIcon.fromTheme("view-refresh")
-        if icon.isNull():
-            icon = self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
-        self.refresh_button.setIcon(icon)
+        self.refresh_button.setIcon(
+            self._icon_for_button(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload), QSize(22, 22))
+        )
         self.refresh_button.setIconSize(QSize(22, 22))
         self.refresh_button.setFixedSize(QSize(42, 42))
         self.refresh_button.setAutoRaise(False)
-        self.refresh_button.setStyleSheet(
-            "QToolButton {"
-            "  border: 1px solid palette(mid);"
-            "  border-radius: 12px;"
-            "  background-color: palette(base);"
-            "}"
-            "QToolButton:hover {"
-            "  background-color: palette(alternate-base);"
-            "}"
-            "QToolButton:pressed {"
-            "  background-color: palette(midlight);"
-            "}"
-        )
+        self.refresh_button.setStyleSheet(self._contrast_button_stylesheet(radius=12))
         self.refresh_button.setToolTip("Refresh detected backups")
         host_layout.addWidget(
             self.refresh_button,
@@ -291,6 +268,38 @@ class LandingPage(QWidget):
         self.open_folder_button.clicked.connect(self._open_folder_dialog)
         self.refresh_button.clicked.connect(self.refresh)
         self.backup_list.itemDoubleClicked.connect(self._open_list_item)
+
+    def _contrast_button_stylesheet(self, radius: int) -> str:
+        return (
+            "QToolButton {"
+            "  border: 1px solid palette(dark);"
+            f"  border-radius: {radius}px;"
+            "  background-color: palette(highlight);"
+            "  color: palette(highlighted-text);"
+            "}"
+            "QToolButton:hover {"
+            "  border-color: palette(highlighted-text);"
+            "}"
+            "QToolButton:pressed {"
+            "  background-color: palette(shadow);"
+            "}"
+        )
+
+    def _icon_for_button(self, base_icon: QIcon, size: QSize) -> QIcon:
+        base = base_icon.pixmap(size)
+        if base.isNull():
+            return base_icon
+
+        tinted = QPixmap(base.size())
+        tinted.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(tinted)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        painter.drawPixmap(0, 0, base)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(tinted.rect(), self.palette().color(QPalette.ColorRole.HighlightedText))
+        painter.end()
+        return QIcon(tinted)
 
     def set_recent_backups(self, paths: list[Path]) -> None:
         self._recent_backup_hints = [path.expanduser() for path in paths]

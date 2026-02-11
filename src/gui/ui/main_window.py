@@ -20,7 +20,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("SmartSwitch Explorer")
-        self.resize(QSize(680, 900))
+        self.resize(QSize(544, 720))
 
         self.thread_pool = QThreadPool(self)
         self.settings = load_settings()
