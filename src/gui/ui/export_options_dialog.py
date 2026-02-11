@@ -19,40 +19,50 @@ class ExportOptionsDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
 
         intro = QLabel("Choose output format by data type:")
+        intro.setStyleSheet("font-size: 14px; font-weight: 600;")
         layout.addWidget(intro)
-
-        row = QHBoxLayout()
-        row.setSpacing(10)
 
         self.messages_combo: QComboBox | None = None
         self.app_data_combo: QComboBox | None = None
 
         if has_messages:
-            row.addWidget(QLabel("Messages"))
             self.messages_combo = QComboBox()
+            self.messages_combo.setMinimumHeight(40)
+            self.messages_combo.setStyleSheet("font-size: 14px;")
             self.messages_combo.addItem("JSON", "json")
             self.messages_combo.addItem("CSV", "csv")
             self.messages_combo.addItem("Native (.bk / raw)", "native")
-            row.addWidget(self.messages_combo, 1)
+            self._add_option_row(layout, "Messages", self.messages_combo)
 
         if has_app_data:
-            row.addWidget(QLabel("Application Data"))
             self.app_data_combo = QComboBox()
+            self.app_data_combo.setMinimumHeight(40)
+            self.app_data_combo.setStyleSheet("font-size: 14px;")
             self.app_data_combo.addItem("Extracted Files", "extract")
             self.app_data_combo.addItem("Decrypted Tar", "decrypt")
             self.app_data_combo.addItem("Both", "both")
-            row.addWidget(self.app_data_combo, 1)
-
-        layout.addLayout(row)
+            self._add_option_row(layout, "Application Data", self.app_data_combo)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok)
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Export")
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setMinimumHeight(38)
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setMinimumHeight(38)
+        buttons.setStyleSheet("QPushButton { font-size: 14px; }")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _add_option_row(self, parent_layout: QVBoxLayout, label: str, combo: QComboBox) -> None:
+        row = QVBoxLayout()
+        row.setSpacing(6)
+        title = QLabel(label)
+        title.setStyleSheet("font-size: 14px; font-weight: 600;")
+        row.addWidget(title)
+        row.addWidget(combo)
+        parent_layout.addLayout(row)
 
     def options(self) -> dict:
         out: dict[str, str] = {}
