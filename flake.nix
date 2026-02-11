@@ -34,6 +34,12 @@
         libxcursor
         libsm
         libice
+        xcbutil
+        xcbutilcursor
+        xcbutilimage
+        xcbutilkeysyms
+        xcbutilrenderutil
+        xcbutilwm
         stdenv.cc.cc.lib
       ];
 
@@ -46,6 +52,14 @@
           unset SOURCE_DATE_EPOCH
           export LD_LIBRARY_PATH=${pkgs.libGL}
           export LD_LIBRARY_PATH=${ldLibraryPath}:''${LD_LIBRARY_PATH:-}
+          export QT_QPA_PLATFORM=''${QT_QPA_PLATFORM:-xcb}
+          unset QT_PLUGIN_PATH
+          unset QML2_IMPORT_PATH
+
+          pyside_plugins="$(uv run python -c 'import pathlib, PySide6; print((pathlib.Path(PySide6.__file__).resolve().parent / "Qt" / "plugins").as_posix())')"
+          export QT_PLUGIN_PATH="$pyside_plugins"
+          export QT_QPA_PLATFORM_PLUGIN_PATH="$pyside_plugins/platforms"
+
           exec uv run smartswitch-explorer "$@"
         '';
       };
@@ -82,6 +96,9 @@
           export LD_LIBRARY_PATH=${pkgs.libGL}
           # full runtime search path for Qt/OpenGL/X11 libs
           export LD_LIBRARY_PATH=${ldLibraryPath}:''${LD_LIBRARY_PATH:-}
+          export QT_QPA_PLATFORM=''${QT_QPA_PLATFORM:-xcb}
+          unset QT_PLUGIN_PATH
+          unset QML2_IMPORT_PATH
 
           echo "SmartSwitch Explorer dev shell ready"
           echo "Run: uv run smartswitch-explorer"
