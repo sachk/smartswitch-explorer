@@ -11,6 +11,7 @@ Native desktop app (PySide6 + Qt widgets) for exploring Samsung Smart Switch bac
 - Contacts
 - Call log
 - Other backup categories (raw copy + zip extraction when present)
+- Encrypted Smart Switch artifacts (shared IV-prefix AES decoder)
 
 ## Key behavior
 
@@ -70,3 +71,8 @@ Exports are written to:
 Default destination:
 
 `~/Documents/SmartSwitch Extracted Backups`
+
+## Format notes
+
+- Call log decryption details: `docs/calllog_format.md`
+- Encrypted format coverage: `docs/encrypted_formats.md`

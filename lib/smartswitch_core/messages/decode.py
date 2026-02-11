@@ -6,9 +6,8 @@ import shutil
 import zipfile
 from pathlib import Path, PurePosixPath
 
-from Crypto.Cipher import AES
-
-from smartswitch_core.crypto.common import DEFAULT_DUMMY_HEX, derive_dummy_key
+from smartswitch_core.crypto.common import DEFAULT_DUMMY_HEX
+from smartswitch_core.crypto.smartdecrypt import decode_iv_prefix_payload
 from smartswitch_core.export import write_manifest
 from smartswitch_core.models import ExportResult
 
@@ -102,25 +101,10 @@ class MessageSource:
 
 
 def _decrypt_bk_json(raw: bytes, dummy_hex: str) -> list[dict] | dict:
-    if len(raw) < 32 or (len(raw) - 16) % 16 != 0:
-        raise ValueError("Invalid backup block layout")
-    key = derive_dummy_key(dummy_hex)
-    iv = raw[:16]
-    ciphertext = raw[16:]
-    decrypted = AES.new(key, AES.MODE_CBC, iv).decrypt(ciphertext)
-
-    start_array = decrypted.find(b"[")
-    start_obj = decrypted.find(b"{")
-    starts = [x for x in (start_array, start_obj) if x != -1]
-    if not starts:
-        raise ValueError("JSON start not found")
-    start = min(starts)
-    end = max(decrypted.rfind(b"]"), decrypted.rfind(b"}"))
-    if end == -1 or end < start:
-        raise ValueError("JSON end not found")
-
-    payload = decrypted[start : end + 1]
-    return json.loads(payload.decode("utf-8"))
+    decoded = decode_iv_prefix_payload(raw, dummy_hex=dummy_hex, name_hint="sms_restore.bk")
+    if decoded.kind != "json":
+        raise ValueError("Decrypted payload is not JSON")
+    return json.loads(decoded.payload.decode("utf-8"))
 
 
 def _write_rows_csv(payload: list[dict] | dict, target: Path) -> None:

@@ -15,12 +15,16 @@ from smartswitch_core.crypto.common import derive_dummy_key
 from smartswitch_core.scan import build_inventory
 
 
+def _encrypt_ivprefix(payload: bytes, *, iv: bytes = b"\x11" * 16, trailer: bytes = b"") -> bytes:
+    pad_len = (16 - (len(payload) % 16)) % 16
+    padded = payload + (b"\x00" * pad_len)
+    ct = AES.new(derive_dummy_key(), AES.MODE_CBC, iv).encrypt(padded)
+    return iv + ct + trailer
+
+
 def _encrypt_calllog_xml(xml_payload: bytes) -> bytes:
     iv = b"\x11" * 16
-    pad_len = (16 - (len(xml_payload) % 16)) % 16
-    padded = xml_payload + (b"\x00" * pad_len)
-    ct = AES.new(derive_dummy_key(), AES.MODE_CBC, iv).encrypt(padded)
-    return iv + ct
+    return _encrypt_ivprefix(xml_payload, iv=iv)
 
 
 def test_inventory_detects_media_watch_contacts_and_calllog(tmp_path: Path) -> None:
@@ -97,3 +101,38 @@ def test_export_calllog_to_csv(tmp_path: Path) -> None:
     csv_text = csv_path.read_text(encoding="utf-8")
     assert "Number" in csv_text
     assert "+123" in csv_text
+
+
+def test_export_watch_backup_decodes_encp_payloads(tmp_path: Path) -> None:
+    backup = tmp_path / "backup"
+    watch = backup / "GALAXYWATCH_CURRENT"
+    watch.mkdir(parents=True)
+
+    json_payload = b'{"watch":"ok"}'
+    (watch / "00_SSM_testjsonencp").write_bytes(_encrypt_ivprefix(json_payload, trailer=b"\x01\x02\x03"))
+    (watch / "GALAXYWATCH_CURRENT_FileEncryptionInfo.json").write_text(
+        '{"path/00_SSM_testjsonencp":"/data/user/0/com.sec.android.easyMover/files/wearbackup/.backup/.info/test.json"}',
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "out"
+    result = export_watch_backup("current", backup, out)
+
+    assert result.ok
+    decoded = (
+        out
+        / "galaxy_watch"
+        / "current"
+        / "decoded"
+        / "data"
+        / "user"
+        / "0"
+        / "com.sec.android.easyMover"
+        / "files"
+        / "wearbackup"
+        / ".backup"
+        / ".info"
+        / "test.json"
+    )
+    assert decoded.exists()
+    assert '"watch":"ok"' in decoded.read_text(encoding="utf-8")

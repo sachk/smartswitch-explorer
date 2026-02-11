@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import csv
+import io
+import json
 import shutil
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path, PurePosixPath
 
-from Crypto.Cipher import AES
-
-from smartswitch_core.crypto.common import DEFAULT_DUMMY_HEX, derive_dummy_key
+from smartswitch_core.crypto.common import DEFAULT_DUMMY_HEX
+from smartswitch_core.crypto.smartdecrypt import (
+    decode_iv_prefix_payload,
+    extract_xml_region,
+)
 from smartswitch_core.export import write_manifest
 from smartswitch_core.models import ExportResult
 
@@ -35,6 +39,74 @@ def _copy_tree(source_dir: Path, destination_dir: Path) -> tuple[int, list[Path]
             warnings.append(f"Failed to copy {source.name}: {exc}")
     outputs.append(destination_dir)
     return copied, outputs, warnings
+
+
+def _safe_target(root: Path, relative: str) -> Path:
+    cleaned = relative.replace("\\", "/").lstrip("/")
+    candidate = (root / cleaned).resolve()
+    root_resolved = root.resolve()
+    if not str(candidate).startswith(str(root_resolved)):
+        raise ValueError("Unsafe output path")
+    return candidate
+
+
+def _extract_zip_bytes(raw_zip: bytes, destination: Path) -> tuple[int, list[str]]:
+    warnings: list[str] = []
+    extracted = 0
+    destination.mkdir(parents=True, exist_ok=True)
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw_zip)) as zf:
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                try:
+                    target = _safe_target(destination, info.filename)
+                except ValueError as exc:
+                    warnings.append(f"Skipped unsafe nested zip path {info.filename}: {exc}")
+                    continue
+                try:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(zf.read(info))
+                    extracted += 1
+                except (OSError, KeyError) as exc:
+                    warnings.append(f"Failed to extract nested zip entry {info.filename}: {exc}")
+    except (OSError, zipfile.BadZipFile) as exc:
+        warnings.append(f"Failed to read nested zip payload: {exc}")
+    return extracted, warnings
+
+
+def _load_watch_name_map(source_dir: Path) -> dict[str, str]:
+    mapping_path = source_dir / f"{source_dir.name}_FileEncryptionInfo.json"
+    if not mapping_path.exists():
+        return {}
+    try:
+        payload = json.loads(mapping_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+    out: dict[str, str] = {}
+    if not isinstance(payload, dict):
+        return out
+    for key, value in payload.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+        out[PurePosixPath(key).name] = value
+    return out
+
+
+def _decoded_watch_target_path(decoded_root: Path, source_name: str, mapped_path: str | None, extension: str) -> Path:
+    if mapped_path:
+        candidate = mapped_path.lstrip("/")
+        relative = Path(candidate)
+        if not relative.suffix and extension:
+            relative = relative.with_suffix(extension)
+        return _safe_target(decoded_root, relative.as_posix())
+
+    base_name = source_name[:-4] if source_name.endswith("encp") else source_name
+    relative = Path(base_name)
+    if not relative.suffix and extension:
+        relative = relative.with_suffix(extension)
+    return _safe_target(decoded_root, relative.as_posix())
 
 
 def export_media_directory(kind: str, backup_dir: Path, out_dir: Path) -> ExportResult:
@@ -67,7 +139,13 @@ def export_media_directory(kind: str, backup_dir: Path, out_dir: Path) -> Export
     return ExportResult(ok=not errors, outputs=outputs, warnings=warnings, errors=errors)
 
 
-def export_watch_backup(kind: str, backup_dir: Path, out_dir: Path) -> ExportResult:
+def export_watch_backup(
+    kind: str,
+    backup_dir: Path,
+    out_dir: Path,
+    *,
+    dummy_hex: str = DEFAULT_DUMMY_HEX,
+) -> ExportResult:
     outputs: list[Path] = []
     warnings: list[str] = []
     errors: list[str] = []
@@ -83,10 +161,59 @@ def export_watch_backup(kind: str, backup_dir: Path, out_dir: Path) -> ExportRes
     outputs.extend(local_outputs)
     warnings.extend(local_warnings)
 
+    name_map = _load_watch_name_map(source_dir)
+    decoded_root = target_dir / "decoded"
+    decoded_count = 0
+    extracted_nested = 0
+    unresolved: list[str] = []
+
+    for source in sorted(source_dir.glob("*encp")):
+        if not source.is_file():
+            continue
+        try:
+            decoded = decode_iv_prefix_payload(
+                source.read_bytes(),
+                dummy_hex=dummy_hex,
+                name_hint=source.name,
+            )
+        except ValueError as exc:
+            warnings.append(f"Failed to decrypt {source.name}: {exc}")
+            unresolved.append(source.name)
+            continue
+
+        mapped = name_map.get(source.name)
+        try:
+            target = _decoded_watch_target_path(decoded_root, source.name, mapped, decoded.extension)
+        except ValueError as exc:
+            warnings.append(f"Skipping unsafe mapped path for {source.name}: {exc}")
+            unresolved.append(source.name)
+            continue
+
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(decoded.payload)
+            decoded_count += 1
+            outputs.append(target)
+        except OSError as exc:
+            warnings.append(f"Failed to write decoded watch file {source.name}: {exc}")
+            unresolved.append(source.name)
+            continue
+
+        if decoded.kind == "zip":
+            nested_dir = target.with_suffix("")
+            nested_count, nested_warnings = _extract_zip_bytes(decoded.payload, nested_dir)
+            warnings.extend(nested_warnings)
+            if nested_count:
+                extracted_nested += nested_count
+                outputs.append(nested_dir)
+
     manifest = {
         "kind": kind,
         "source": str(source_dir),
         "copied_files": copied,
+        "decoded_files": decoded_count,
+        "decoded_nested_zip_entries": extracted_nested,
+        "unresolved_encrypted_files": unresolved,
         "warnings": warnings,
         "errors": errors,
     }
@@ -159,26 +286,13 @@ def export_contacts(
 
 
 def _decrypt_call_log_exml(raw: bytes, dummy_hex: str) -> bytes:
-    if len(raw) < 32:
-        raise ValueError("Encrypted call log payload too small")
-    iv = raw[:16]
-    ciphertext = raw[16:]
-    ciphertext = ciphertext[: len(ciphertext) - (len(ciphertext) % 16)]
-    if not ciphertext:
-        raise ValueError("Missing aligned encrypted call log payload")
-
-    decrypted = AES.new(derive_dummy_key(dummy_hex), AES.MODE_CBC, iv).decrypt(ciphertext)
-    start = decrypted.find(b"<?xml")
-    if start == -1:
-        start = decrypted.find(b"<CallLogs")
-    if start == -1:
-        raise ValueError("Decrypted call log XML header not found")
-
-    end_marker = b"</CallLogs>"
-    end = decrypted.rfind(end_marker)
-    if end != -1:
-        return decrypted[start : end + len(end_marker)]
-    return decrypted[start:].rstrip(b"\x00")
+    decoded = decode_iv_prefix_payload(
+        raw,
+        dummy_hex=dummy_hex,
+        name_hint="call_log.exml",
+        xml_root_tag="CallLogs",
+    )
+    return extract_xml_region(decoded.payload, root_tag="CallLogs")
 
 
 def _call_log_rows(xml_payload: bytes) -> list[dict[str, str]]:
