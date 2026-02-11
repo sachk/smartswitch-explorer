@@ -181,7 +181,7 @@ dependencies = [
     { name = "pyside6" },
 ]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
 dev = [
     { name = "pytest" },
 ]
@@ -190,9 +190,10 @@ dev = [
 requires-dist = [
     { name = "pycryptodome", specifier = ">=3.20" },
     { name = "pyside6", specifier = ">=6.7" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.2" },
 ]
-provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.2" }]
 
 [[package]]
 name = "tomli"

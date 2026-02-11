@@ -35,7 +35,26 @@
         libice
         stdenv.cc.cc.lib
       ];
+
+      ldLibraryPath = pkgs.lib.makeLibraryPath runtimeLibs;
+
+      runGui = pkgs.writeShellApplication {
+        name = "smartswitch-explorer-run";
+        runtimeInputs = [pkgs.uv];
+        text = ''
+          unset SOURCE_DATE_EPOCH
+          export LD_LIBRARY_PATH=${pkgs.libGL}
+          export LD_LIBRARY_PATH=${ldLibraryPath}:''${LD_LIBRARY_PATH:-}
+          exec uv run smartswitch-explorer "$@"
+        '';
+      };
     in {
+      packages.default = runGui;
+      apps.default = {
+        type = "app";
+        program = "${runGui}/bin/smartswitch-explorer-run";
+      };
+
       devShells.default = pkgs.mkShell {
         name = "smartswitch-explorer";
         venvDir = "./.venv";
@@ -61,10 +80,11 @@
           # requested explicit export
           export LD_LIBRARY_PATH=${pkgs.libGL}
           # full runtime search path for Qt/OpenGL/X11 libs
-          export LD_LIBRARY_PATH=${pkgs.lib.makeLibraryPath runtimeLibs}:''${LD_LIBRARY_PATH:-}
+          export LD_LIBRARY_PATH=${ldLibraryPath}:''${LD_LIBRARY_PATH:-}
 
           echo "SmartSwitch Explorer dev shell ready"
           echo "Run: uv run smartswitch-explorer"
+          echo "Or:  nix run"
         '';
       };
     });

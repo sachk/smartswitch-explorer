@@ -42,6 +42,14 @@ nix develop
 The flake dev shell initializes `.venv`, runs `uv sync`, and exports `LD_LIBRARY_PATH`
 with `libGL` and required Qt/X11 runtime libraries for PySide6.
 
+## Run via Nix
+
+```bash
+nix run
+```
+
+This directly runs `uv run smartswitch-explorer` with the same runtime library setup.
+
 ## Tests
 
 ```bash
