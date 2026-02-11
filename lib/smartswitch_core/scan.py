@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from smartswitch_core.applications.detect import detect_applications
@@ -30,12 +31,15 @@ def is_backup_dir(path: Path) -> bool:
 def _bounded_walk_dirs(root: Path, max_depth: int) -> list[Path]:
     root = root.resolve()
     out: list[Path] = []
-    for current in root.rglob("*"):
-        if not current.is_dir():
+    for current, dirs, _files in os.walk(root):
+        current_path = Path(current)
+        rel_parts = len(current_path.relative_to(root).parts)
+        if rel_parts > max_depth:
+            dirs[:] = []
             continue
-        rel_parts = len(current.relative_to(root).parts)
-        if rel_parts <= max_depth:
-            out.append(current)
+        out.append(current_path)
+        if rel_parts == max_depth:
+            dirs[:] = []
     return out
 
 

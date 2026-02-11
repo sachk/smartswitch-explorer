@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import json
+import hashlib
+import io
 import struct
 import tarfile
 import zlib
@@ -123,7 +124,7 @@ def _decode_data_payload(path: Path, password: str) -> tuple[bytes, dict]:
     if algorithm != "AES-256":
         raise ValueError(f"Unsupported algorithm: {algorithm}")
 
-    user_key = __import__("hashlib").pbkdf2_hmac(
+    user_key = hashlib.pbkdf2_hmac(
         "sha1", password.encode("utf-8"), user_salt, rounds, dklen=32
     )
     unwrapped = unpad(AES.new(user_key, AES.MODE_CBC, user_iv).decrypt(mk_blob), 16)
@@ -163,7 +164,7 @@ def _safe_extract_tar(payload: bytes, out_dir: Path) -> tuple[int, list[str]]:
     out_dir.mkdir(parents=True, exist_ok=True)
     extracted = 0
     try:
-        with tarfile.open(fileobj=__import__("io").BytesIO(payload), mode="r:") as tf:
+        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as tf:
             for member in tf.getmembers():
                 try:
                     target = _safe_join(out_dir, member.name)
