@@ -119,7 +119,6 @@ class BackupListItemWidget(QWidget):
         path_label = QLabel(textwrap.fill(str(backup_dir), width=80))
         path_label.setWordWrap(True)
         path_label.setStyleSheet("font-size: 12px;")
-        path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         content.addWidget(path_label)
         content.addItem(QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
 

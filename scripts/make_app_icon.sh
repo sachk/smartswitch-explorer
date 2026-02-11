@@ -14,6 +14,8 @@ mkdir -p "$(dirname "$OUTPUT_ICON")"
 
 nix-shell -p imagemagick --run "
   magick '$SOURCE_ICON' \
+    -alpha set -fuzz 8% -transparent white \
+    -background none \
     -resize 512x512^ -gravity center -extent 512x512 \
     -modulate 100,110,100 \
     \( -size 512x512 xc:none \
