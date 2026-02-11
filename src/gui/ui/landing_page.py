@@ -3,16 +3,17 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import (
     QFileDialog,
+    QFrame,
     QGroupBox,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QPushButton,
     QSizePolicy,
     QToolButton,
     QVBoxLayout,
@@ -33,24 +34,45 @@ class LandingPage(QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(8)
 
+        header_row = QHBoxLayout()
+        header_row.setSpacing(12)
+
         title = QLabel("SmartSwitch Explorer")
         title.setObjectName("title")
         title.setStyleSheet("font-size: 32px; font-weight: 700;")
-        layout.addWidget(title)
+        header_row.addWidget(title, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.VLine)
+        divider.setFrameShadow(QFrame.Shadow.Sunken)
+        header_row.addWidget(divider)
 
         subtitle = QLabel("Open a backup folder or choose from automatically detected backups.")
-        subtitle.setWordWrap(False)
+        subtitle.setWordWrap(True)
         subtitle.setStyleSheet("font-size: 16px;")
-        layout.addWidget(subtitle)
+        subtitle.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        header_row.addWidget(subtitle, 1, alignment=Qt.AlignmentFlag.AlignVCenter)
+        layout.addLayout(header_row)
 
-        self.open_button = QPushButton("Open Folder")
-        self.open_button.setMinimumHeight(52)
-        self.open_button.setStyleSheet("font-size: 15px; font-weight: 600;")
-        self.open_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.open_button.setMinimumWidth(220)
-        layout.addWidget(self.open_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.path_input = QLineEdit()
+        self.path_input.setPlaceholderText("Select a backup folder")
+        self.path_input.setMinimumHeight(42)
+        self.path_input.setStyleSheet("font-size: 14px; padding-right: 8px;")
+
+        open_icon = QIcon.fromTheme("folder-open")
+        if open_icon.isNull():
+            open_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon)
+        self.open_action = QAction(open_icon, "Open folder", self.path_input)
+        self.open_action.triggered.connect(self._open_folder_dialog)
+        self.path_input.addAction(self.open_action, QLineEdit.ActionPosition.TrailingPosition)
+        self.path_input.returnPressed.connect(self._open_path_from_input)
+        layout.addWidget(self.path_input)
 
         self.backup_group = QGroupBox("Detected Backups")
+        self.backup_group.setStyleSheet(
+            "QGroupBox { font-size: 18px; font-weight: 600; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
+        )
         group_layout = QVBoxLayout(self.backup_group)
         group_layout.setContentsMargins(10, 10, 10, 10)
         group_layout.setSpacing(0)
@@ -121,7 +143,6 @@ class LandingPage(QWidget):
 
         layout.addWidget(self.backup_group, 1)
 
-        self.open_button.clicked.connect(self._open_folder)
         self.refresh_button.clicked.connect(self.refresh)
         self.backup_list.itemDoubleClicked.connect(self._open_list_item)
 
@@ -143,11 +164,18 @@ class LandingPage(QWidget):
         self.empty_state.hide()
         self.backup_list.show()
 
-    def _open_folder(self) -> None:
+    def _open_folder_dialog(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Select Backup Folder")
         if not path:
             return
+        self.path_input.setText(path)
         self.backup_selected.emit(Path(path))
+
+    def _open_path_from_input(self) -> None:
+        raw_path = self.path_input.text().strip()
+        if not raw_path:
+            return
+        self.backup_selected.emit(Path(raw_path).expanduser())
 
     def _open_list_item(self, item: QListWidgetItem) -> None:
         raw = item.data(Qt.ItemDataRole.UserRole)
