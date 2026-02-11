@@ -40,5 +40,8 @@ packages = [
 "smartswitch_core.crypto" = "lib/smartswitch_core/crypto"
 "smartswitch_core.messages" = "lib/smartswitch_core/messages"
 
+[tool.setuptools.package-data]
+"gui" = ["assets/*.png"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
