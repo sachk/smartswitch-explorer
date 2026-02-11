@@ -340,6 +340,12 @@ class LandingPage(QWidget):
     def set_path_text(self, path: Path) -> None:
         self.path_input.setText(str(path.expanduser()))
 
+    def _add_recent_hint(self, path: Path) -> None:
+        expanded = path.expanduser()
+        deduped = [expanded]
+        deduped.extend([hint for hint in self._recent_backup_hints if hint != expanded])
+        self._recent_backup_hints = deduped[:6]
+
     def refresh(self) -> None:
         self.backup_list.clear()
         count = 0
@@ -387,14 +393,18 @@ class LandingPage(QWidget):
         path = QFileDialog.getExistingDirectory(self, "Select Backup Folder")
         if not path:
             return
-        self.path_input.setText(path)
-        self.backup_selected.emit(Path(path))
+        selected = Path(path).expanduser()
+        self.path_input.setText(str(selected))
+        self._add_recent_hint(selected)
+        self.refresh()
 
     def _open_path_from_input(self) -> None:
         raw_path = self.path_input.text().strip()
         if not raw_path:
             return
-        self.backup_selected.emit(Path(raw_path).expanduser())
+        selected = Path(raw_path).expanduser()
+        self._add_recent_hint(selected)
+        self.refresh()
 
     def _open_list_item(self, item: QListWidgetItem) -> None:
         raw = item.data(Qt.ItemDataRole.UserRole)

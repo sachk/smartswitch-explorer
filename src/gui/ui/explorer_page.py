@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QModelIndex, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QDialog,
@@ -66,6 +66,19 @@ class ExplorerPage(QWidget):
         self.tree.setUniformRowHeights(True)
         self.tree.setAlternatingRowColors(True)
         self.tree.setHeaderHidden(False)
+        self.tree.setStyleSheet(
+            "QTreeView::indicator {"
+            "  width: 18px;"
+            "  height: 18px;"
+            "  border: 1px solid palette(light);"
+            "  border-radius: 4px;"
+            "  background: palette(base);"
+            "}"
+            "QTreeView::indicator:checked {"
+            "  border-color: palette(highlighted-text);"
+            "  background: palette(highlight);"
+            "}"
+        )
         layout.addWidget(self.tree, 1)
 
         actions = QHBoxLayout()
@@ -106,6 +119,10 @@ class ExplorerPage(QWidget):
 
     def _apply_search(self, text: str) -> None:
         self.proxy.setFilterFixedString(text)
+        if text.strip():
+            self._expand_search_matches()
+            return
+        self.tree.collapseAll()
 
     def _pick_destination(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Select Destination Folder")
@@ -119,10 +136,39 @@ class ExplorerPage(QWidget):
             return
 
         has_messages = any(node["kind"] == "message_subitem" for node in selected)
-        has_apps = any(node["kind"] in {"app_data", "app_apk"} for node in selected)
+        has_app_data = any(node["kind"] == "app_data" for node in selected)
+        has_app_apk = any(node["kind"] == "app_apk" for node in selected)
 
-        dialog = ExportOptionsDialog(has_messages=has_messages, has_apps=has_apps, parent=self)
+        dialog = ExportOptionsDialog(
+            has_messages=has_messages,
+            has_app_data=has_app_data,
+            has_app_apk=has_app_apk,
+            parent=self,
+        )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
         self.run_action_requested.emit(dialog.options(), selected, self.destination_path())
+
+    def _count_visible_rows(self, parent: QModelIndex = QModelIndex()) -> int:
+        total = 0
+        rows = self.proxy.rowCount(parent)
+        for row in range(rows):
+            child = self.proxy.index(row, 0, parent)
+            if not child.isValid():
+                continue
+            total += 1
+            total += self._count_visible_rows(child)
+        return total
+
+    def _expand_search_matches(self) -> None:
+        self.tree.collapseAll()
+        root = QModelIndex()
+        top_rows = self.proxy.rowCount(root)
+        for row in range(top_rows):
+            idx = self.proxy.index(row, 0, root)
+            if idx.isValid():
+                self.tree.expand(idx)
+
+        if self._count_visible_rows() < 5:
+            self.tree.expandAll()

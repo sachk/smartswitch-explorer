@@ -196,6 +196,7 @@ def decrypt_extract_app(
     dummy_hex: str = DEFAULT_DUMMY_HEX,
     include_decrypt: bool = True,
     include_extract: bool = True,
+    manifest_name: str = "manifest.json",
 ) -> ExportResult:
     outputs: list[Path] = []
     warnings: list[str] = []
@@ -221,8 +222,9 @@ def decrypt_extract_app(
         if penc_path.exists():
             try:
                 dec = _decrypt_penc(penc_path, dummy_hex)
+                manifest["penc"] = {"decrypted_size": len(dec)}
                 if include_decrypt:
-                    dec_path = package_out / "penc.decrypted.bin"
+                    dec_path = package_out / f"{package_id}.decrypted.apk"
                     dec_path.write_bytes(dec)
                     outputs.append(dec_path)
                 if include_extract:
@@ -230,11 +232,8 @@ def decrypt_extract_app(
                     extracted, skipped, local_warnings = _extract_local_entries(dec, files_dir)
                     warnings.extend(local_warnings)
                     outputs.append(files_dir)
-                    manifest["penc"] = {
-                        "decrypted_size": len(dec),
-                        "extracted_files": extracted,
-                        "skipped_files": skipped,
-                    }
+                    manifest["penc"]["extracted_files"] = extracted
+                    manifest["penc"]["skipped_files"] = skipped
             except Exception as exc:  # pragma: no cover - defensive boundary
                 errors.append(f"APK decrypt/extract failed for {package_id}: {exc}")
         else:
@@ -261,7 +260,7 @@ def decrypt_extract_app(
         else:
             warnings.append(f"Missing .data file for {package_id}")
 
-    manifest_path = package_out / "manifest.json"
+    manifest_path = package_out / manifest_name
     write_manifest(manifest_path, manifest)
     outputs.append(manifest_path)
 

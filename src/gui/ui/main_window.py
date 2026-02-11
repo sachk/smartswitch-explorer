@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSize, QThreadPool
+from PySide6.QtCore import QSize, QThreadPool, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QStackedWidget
 
 from smartswitch_core.applications.decrypt_extract import decrypt_extract_app
@@ -108,9 +109,9 @@ class MainWindow(QMainWindow):
         outputs: list[str] = []
 
         messages_format = str(options.get("messages_format", "json"))
-        apps_mode = str(options.get("apps_mode", "extract"))
-        apps_include_decrypt = apps_mode in {"decrypt", "both"}
-        apps_include_extract = apps_mode in {"extract", "both"}
+        app_data_mode = str(options.get("app_data_mode", "extract"))
+        app_data_include_decrypt = app_data_mode in {"decrypt", "both"}
+        app_data_include_extract = app_data_mode in {"extract", "both"}
 
         message_parts = {
             node["id"].split(":", 1)[1]
@@ -140,24 +141,33 @@ class MainWindow(QMainWindow):
             app_modes.setdefault(package_id, set()).add("data" if kind == "app_data" else "apk")
 
         for package_id, selected_modes in app_modes.items():
-            if selected_modes == {"data", "apk"}:
-                mode = "both"
-            elif "data" in selected_modes:
-                mode = "data"
-            else:
-                mode = "apk"
+            if "data" in selected_modes:
+                result = decrypt_extract_app(
+                    package_id,
+                    "data",
+                    backup_dir,
+                    export_root / "applications",
+                    include_decrypt=app_data_include_decrypt,
+                    include_extract=app_data_include_extract,
+                    manifest_name="manifest_data.json",
+                )
+                warnings.extend(result.warnings)
+                errors.extend(result.errors)
+                outputs.extend(str(path) for path in result.outputs)
 
-            result = decrypt_extract_app(
-                package_id,
-                mode,
-                backup_dir,
-                export_root / "applications",
-                include_decrypt=apps_include_decrypt,
-                include_extract=apps_include_extract,
-            )
-            warnings.extend(result.warnings)
-            errors.extend(result.errors)
-            outputs.extend(str(path) for path in result.outputs)
+            if "apk" in selected_modes:
+                result = decrypt_extract_app(
+                    package_id,
+                    "apk",
+                    backup_dir,
+                    export_root / "applications",
+                    include_decrypt=True,
+                    include_extract=False,
+                    manifest_name="manifest_apk.json",
+                )
+                warnings.extend(result.warnings)
+                errors.extend(result.errors)
+                outputs.extend(str(path) for path in result.outputs)
 
         return {
             "ok": not errors,
@@ -178,12 +188,12 @@ class MainWindow(QMainWindow):
             summary = [f"Export complete: {export_root}"]
             if warnings:
                 summary.append(f"Warnings: {len(warnings)}")
-            QMessageBox.information(self, "Done", "\n".join(summary))
+            self._show_export_result("Done", "\n".join(summary), export_root, warning=False)
         else:
             summary = [f"Export finished with errors: {export_root}", f"Errors: {len(errors)}"]
             if warnings:
                 summary.append(f"Warnings: {len(warnings)}")
-            QMessageBox.warning(self, "Completed with errors", "\n".join(summary))
+            self._show_export_result("Completed with errors", "\n".join(summary), export_root, warning=True)
 
     def _handle_action_error(self, message: str) -> None:
         self.explorer_page.set_busy(False)
@@ -191,3 +201,15 @@ class MainWindow(QMainWindow):
 
     def _show_error(self, message: str) -> None:
         QMessageBox.critical(self, "Error", message)
+
+    def _show_export_result(self, title: str, text: str, export_root: str, *, warning: bool) -> None:
+        box = QMessageBox(self)
+        box.setWindowTitle(title)
+        box.setText(text)
+        box.setIcon(QMessageBox.Icon.Warning if warning else QMessageBox.Icon.Information)
+        open_button = box.addButton("Open Folder", QMessageBox.ButtonRole.ActionRole)
+        close_button = box.addButton(QMessageBox.StandardButton.Close)
+        box.setDefaultButton(close_button)
+        box.exec()
+        if box.clickedButton() is open_button and export_root:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(export_root))

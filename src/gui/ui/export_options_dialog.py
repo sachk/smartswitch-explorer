@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 
 
 class ExportOptionsDialog(QDialog):
-    def __init__(self, has_messages: bool, has_apps: bool, parent=None) -> None:
+    def __init__(self, has_messages: bool, has_app_data: bool, has_app_apk: bool, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Export Options")
         self.setModal(True)
@@ -28,7 +28,8 @@ class ExportOptionsDialog(QDialog):
         row.setSpacing(10)
 
         self.messages_combo: QComboBox | None = None
-        self.apps_combo: QComboBox | None = None
+        self.app_data_combo: QComboBox | None = None
+        self.app_apk_combo: QComboBox | None = None
 
         if has_messages:
             row.addWidget(QLabel("Messages"))
@@ -38,13 +39,20 @@ class ExportOptionsDialog(QDialog):
             self.messages_combo.addItem("Native (.bk / raw)", "native")
             row.addWidget(self.messages_combo, 1)
 
-        if has_apps:
-            row.addWidget(QLabel("Applications"))
-            self.apps_combo = QComboBox()
-            self.apps_combo.addItem("Extracted Files", "extract")
-            self.apps_combo.addItem("Decrypted Binaries", "decrypt")
-            self.apps_combo.addItem("Both", "both")
-            row.addWidget(self.apps_combo, 1)
+        if has_app_data:
+            row.addWidget(QLabel("Application Data"))
+            self.app_data_combo = QComboBox()
+            self.app_data_combo.addItem("Extracted Files", "extract")
+            self.app_data_combo.addItem("Decrypted Tar", "decrypt")
+            self.app_data_combo.addItem("Both", "both")
+            row.addWidget(self.app_data_combo, 1)
+
+        if has_app_apk:
+            row.addWidget(QLabel("Application APKs"))
+            self.app_apk_combo = QComboBox()
+            self.app_apk_combo.addItem("Decrypted APK", "decrypted_apk")
+            self.app_apk_combo.setEnabled(False)
+            row.addWidget(self.app_apk_combo, 1)
 
         layout.addLayout(row)
 
@@ -58,6 +66,8 @@ class ExportOptionsDialog(QDialog):
         out: dict[str, str] = {}
         if self.messages_combo is not None:
             out["messages_format"] = str(self.messages_combo.currentData())
-        if self.apps_combo is not None:
-            out["apps_mode"] = str(self.apps_combo.currentData())
+        if self.app_data_combo is not None:
+            out["app_data_mode"] = str(self.app_data_combo.currentData())
+        if self.app_apk_combo is not None:
+            out["app_apk_mode"] = str(self.app_apk_combo.currentData())
         return out
