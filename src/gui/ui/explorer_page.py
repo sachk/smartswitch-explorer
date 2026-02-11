@@ -219,14 +219,20 @@ class ExplorerPage(QWidget):
 
         has_messages = any(node["kind"] == "message_subitem" for node in selected)
         has_app_data = any(node["kind"] == "app_data" for node in selected)
+        has_contacts = any(
+            node["kind"] in {"contacts_csv", "contacts_archive", "contacts_files"} for node in selected
+        )
+        has_calllog = any(node["kind"] == "calllog_entries" for node in selected)
 
-        if not has_messages and not has_app_data:
+        if not has_messages and not has_app_data and not has_contacts and not has_calllog:
             self.run_action_requested.emit({}, selected, self.destination_path())
             return
 
         dialog = ExportOptionsDialog(
             has_messages=has_messages,
             has_app_data=has_app_data,
+            has_contacts=has_contacts,
+            has_calllog=has_calllog,
             parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:

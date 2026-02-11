@@ -6,6 +6,12 @@ from PySide6.QtCore import QSize, QThreadPool, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QStackedWidget
 
+from smartswitch_core.additional_export import (
+    export_call_log,
+    export_contacts,
+    export_media_directory,
+    export_watch_backup,
+)
 from smartswitch_core.applications.decrypt_extract import copy_app_apk_payload, decrypt_extract_app
 from smartswitch_core.export import make_export_root
 from smartswitch_core.messages.decode import decode_and_export_messages
@@ -164,6 +170,53 @@ class MainWindow(QMainWindow):
                 warnings.extend(result.warnings)
                 errors.extend(result.errors)
                 outputs.extend(str(path) for path in result.outputs)
+
+        media_kinds = {
+            node["kind"] for node in selected_nodes if node["kind"] in {"media_photos", "media_videos"}
+        }
+        if "media_photos" in media_kinds:
+            result = export_media_directory("photos", backup_dir, export_root)
+            warnings.extend(result.warnings)
+            errors.extend(result.errors)
+            outputs.extend(str(path) for path in result.outputs)
+        if "media_videos" in media_kinds:
+            result = export_media_directory("videos", backup_dir, export_root)
+            warnings.extend(result.warnings)
+            errors.extend(result.errors)
+            outputs.extend(str(path) for path in result.outputs)
+
+        watch_kinds = {
+            node["kind"] for node in selected_nodes if node["kind"] in {"watch_current", "watch_backup"}
+        }
+        if "watch_current" in watch_kinds:
+            result = export_watch_backup("current", backup_dir, export_root)
+            warnings.extend(result.warnings)
+            errors.extend(result.errors)
+            outputs.extend(str(path) for path in result.outputs)
+        if "watch_backup" in watch_kinds:
+            result = export_watch_backup("backup", backup_dir, export_root)
+            warnings.extend(result.warnings)
+            errors.extend(result.errors)
+            outputs.extend(str(path) for path in result.outputs)
+
+        contacts_kinds = {
+            node["kind"]
+            for node in selected_nodes
+            if node["kind"] in {"contacts_csv", "contacts_archive", "contacts_files"}
+        }
+        if contacts_kinds:
+            contacts_format = str(options.get("contacts_format", "csv"))
+            result = export_contacts(backup_dir, export_root, output_format=contacts_format)
+            warnings.extend(result.warnings)
+            errors.extend(result.errors)
+            outputs.extend(str(path) for path in result.outputs)
+
+        if any(node["kind"] == "calllog_entries" for node in selected_nodes):
+            calllog_format = str(options.get("calllog_format", "csv"))
+            result = export_call_log(backup_dir, export_root, output_format=calllog_format)
+            warnings.extend(result.warnings)
+            errors.extend(result.errors)
+            outputs.extend(str(path) for path in result.outputs)
 
         return {
             "ok": not errors,
