@@ -182,14 +182,22 @@ class LandingPage(QWidget):
         picker_host = QWidget()
         picker_row = QHBoxLayout(picker_host)
         picker_row.setContentsMargins(10, 0, 10, 0)
-        picker_row.setSpacing(6)
+        picker_row.setSpacing(0)
+
+        self.path_picker = QFrame()
+        self.path_picker.setObjectName("pathPicker")
+        self.path_picker.setStyleSheet(self._path_picker_stylesheet())
+        path_picker_layout = QHBoxLayout(self.path_picker)
+        path_picker_layout.setContentsMargins(0, 0, 0, 0)
+        path_picker_layout.setSpacing(0)
 
         self.path_input = QLineEdit()
         self.path_input.setPlaceholderText("Select a backup folder")
         self.path_input.setMinimumHeight(42)
-        self.path_input.setStyleSheet("font-size: 14px;")
+        self.path_input.setFrame(False)
+        self.path_input.setStyleSheet("font-size: 14px; padding-left: 12px; padding-right: 8px;")
         self.path_input.returnPressed.connect(self._open_path_from_input)
-        picker_row.addWidget(self.path_input, 1)
+        path_picker_layout.addWidget(self.path_input, 1)
 
         self.open_folder_button = QToolButton()
         self.open_folder_button.setFixedSize(QSize(42, 42))
@@ -199,8 +207,24 @@ class LandingPage(QWidget):
         self.open_folder_button.setIconSize(QSize(20, 20))
         self.open_folder_button.setToolTip("Open folder chooser")
         self.open_folder_button.setAutoRaise(False)
-        self.open_folder_button.setStyleSheet(self._contrast_button_stylesheet(radius=8))
-        picker_row.addWidget(self.open_folder_button)
+        self.open_folder_button.setStyleSheet(
+            "QToolButton {"
+            "  border: none;"
+            "  border-left: 1px solid palette(dark);"
+            "  border-top-right-radius: 10px;"
+            "  border-bottom-right-radius: 10px;"
+            "  background-color: palette(highlight);"
+            "  color: palette(highlighted-text);"
+            "}"
+            "QToolButton:hover {"
+            "  border-left: 1px solid palette(highlighted-text);"
+            "}"
+            "QToolButton:pressed {"
+            "  background-color: palette(shadow);"
+            "}"
+        )
+        path_picker_layout.addWidget(self.open_folder_button)
+        picker_row.addWidget(self.path_picker, 1)
         layout.addWidget(picker_host)
 
         self.backup_group = QGroupBox("Detected Backups")
@@ -251,7 +275,7 @@ class LandingPage(QWidget):
         self.refresh_button.setIconSize(QSize(22, 22))
         self.refresh_button.setFixedSize(QSize(42, 42))
         self.refresh_button.setAutoRaise(False)
-        self.refresh_button.setStyleSheet(self._contrast_button_stylesheet(radius=12))
+        self.refresh_button.setStyleSheet(self._contrast_button_stylesheet(radius=21))
         self.refresh_button.setToolTip("Refresh detected backups")
         host_layout.addWidget(
             self.refresh_button,
@@ -282,6 +306,15 @@ class LandingPage(QWidget):
             "}"
             "QToolButton:pressed {"
             "  background-color: palette(shadow);"
+            "}"
+        )
+
+    def _path_picker_stylesheet(self) -> str:
+        return (
+            "QFrame#pathPicker {"
+            "  border: 1px solid palette(dark);"
+            "  border-radius: 10px;"
+            "  background-color: palette(base);"
             "}"
         )
 
