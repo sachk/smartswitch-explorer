@@ -199,19 +199,14 @@ class MainWindow(QMainWindow):
             errors.extend(result.errors)
             outputs.extend(str(path) for path in result.outputs)
 
-        contacts_kinds = {
-            node["kind"]
-            for node in selected_nodes
-            if node["kind"] in {"contacts_csv", "contacts_archive", "contacts_files"}
-        }
-        if contacts_kinds:
+        if any(node["kind"] == "contacts" for node in selected_nodes):
             contacts_format = str(options.get("contacts_format", "csv"))
             result = export_contacts(backup_dir, export_root, output_format=contacts_format)
             warnings.extend(result.warnings)
             errors.extend(result.errors)
             outputs.extend(str(path) for path in result.outputs)
 
-        if any(node["kind"] == "calllog_entries" for node in selected_nodes):
+        if any(node["kind"] == "calllog" for node in selected_nodes):
             calllog_format = str(options.get("calllog_format", "csv"))
             result = export_call_log(backup_dir, export_root, output_format=calllog_format)
             warnings.extend(result.warnings)

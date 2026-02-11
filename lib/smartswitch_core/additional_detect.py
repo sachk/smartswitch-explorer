@@ -90,47 +90,14 @@ def detect_contacts_root(backup_dir: Path) -> TreeItem | None:
     if not contact_dir.exists():
         return None
 
-    has_csv = any(contact_dir.glob("*.csv"))
-    has_archive = (contact_dir / "Contact.spbm").exists()
-    has_other = _dir_has_files(contact_dir)
-
-    children: list[TreeItem] = []
-    if has_csv:
-        children.append(
-            TreeItem(
-                id="contacts:csv",
-                kind="contacts_csv",
-                label="Contacts CSV",
-                source_path=contact_dir,
-            )
-        )
-    if has_archive:
-        children.append(
-            TreeItem(
-                id="contacts:archive",
-                kind="contacts_archive",
-                label="Contacts Archive",
-                source_path=contact_dir / "Contact.spbm",
-            )
-        )
-    if not children and has_other:
-        children.append(
-            TreeItem(
-                id="contacts:files",
-                kind="contacts_files",
-                label="Contact Files",
-                source_path=contact_dir,
-            )
-        )
-
-    if not children:
+    if not _dir_has_files(contact_dir):
         return None
+
     return TreeItem(
         id="contacts",
-        kind="contacts_root",
+        kind="contacts",
         label="Contacts",
         source_path=contact_dir,
-        children=children,
     )
 
 
@@ -140,15 +107,7 @@ def detect_call_log_root(backup_dir: Path) -> TreeItem | None:
         return None
     return TreeItem(
         id="calllog",
-        kind="calllog_root",
+        kind="calllog",
         label="Call Log",
         source_path=call_log_zip.parent,
-        children=[
-            TreeItem(
-                id="calllog:entries",
-                kind="calllog_entries",
-                label="Call Logs",
-                source_path=call_log_zip,
-            )
-        ],
     )
