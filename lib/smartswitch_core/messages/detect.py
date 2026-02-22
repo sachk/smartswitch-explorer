@@ -3,6 +3,13 @@ from __future__ import annotations
 import zipfile
 from pathlib import Path, PurePosixPath
 
+from smartswitch_core.file_signatures import (
+    MESSAGE_PART_ATTACHMENTS,
+    MESSAGE_PART_MMS,
+    MESSAGE_PART_RCS,
+    MESSAGE_PART_SMS,
+    message_part_keys_from_filename,
+)
 from smartswitch_core.models import TreeItem
 
 
@@ -26,10 +33,14 @@ def detect_message_subitems(backup_dir: Path) -> list[TreeItem]:
     if smem_path.exists():
         local_names.update(_entry_names_from_smem(smem_path))
 
-    has_sms = any(name.endswith("sms_restore.bk") for name in local_names)
-    has_mms = any(name.endswith("mms_restore.bk") for name in local_names)
-    has_attachments = any("PART_" in name for name in local_names)
-    has_rcs = any(("RCSMESSAGE" in name) or ("RcsMessage" in name) for name in local_names)
+    detected_parts: set[str] = set()
+    for name in local_names:
+        detected_parts.update(message_part_keys_from_filename(name))
+
+    has_sms = MESSAGE_PART_SMS in detected_parts
+    has_mms = MESSAGE_PART_MMS in detected_parts
+    has_attachments = MESSAGE_PART_ATTACHMENTS in detected_parts
+    has_rcs = MESSAGE_PART_RCS in detected_parts
 
     items: list[TreeItem] = []
     if has_sms:

@@ -4,7 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QSize, QThreadPool, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QStackedWidget
 
 from smartswitch_core.additional_export import (
@@ -14,7 +14,12 @@ from smartswitch_core.additional_export import (
     export_watch_backup,
 )
 from smartswitch_core.applications.decrypt_extract import copy_app_apk_payload, decrypt_extract_app
-from smartswitch_core.direct_file import map_direct_file_to_item_ids, path_key, stage_direct_files_as_backup
+from smartswitch_core.direct_file import (
+    cleanup_staged_backup_dirs,
+    map_direct_file_to_item_ids,
+    path_key,
+    plan_direct_import,
+)
 from smartswitch_core.export import make_export_root
 from smartswitch_core.messages.decode import decode_and_export_messages
 from smartswitch_core.metadata import enrich_inventory
@@ -43,32 +48,6 @@ def _render_issue_lines(lines: list[str], *, limit: int = 10) -> str:
     return "\n".join([*lines[:limit], f"... and {remaining} more"])
 
 
-def _resolve_backup_from_file(file_path: Path) -> Path | None:
-    if not file_path.exists() or not file_path.is_file():
-        return None
-
-    parents_to_try = [file_path.parent]
-    if file_path.parent.parent != file_path.parent:
-        parents_to_try.append(file_path.parent.parent)
-    if file_path.parent.parent.parent != file_path.parent.parent:
-        parents_to_try.append(file_path.parent.parent.parent)
-
-    seen: set[str] = set()
-    for parent in parents_to_try:
-        key = str(parent).casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-
-        if is_backup_dir(parent):
-            return parent
-        backups = find_backups(parent)
-        if backups:
-            return backups[0].path
-
-    return None
-
-
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -80,6 +59,7 @@ class MainWindow(QMainWindow):
         self.current_backup: Path | None = None
         self._active_operation: str | None = None
         self._export_cancel_token: CancelToken | None = None
+        self._staged_backups: dict[str, Path] = {}
 
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
@@ -123,64 +103,61 @@ class MainWindow(QMainWindow):
             return
         self.stack.setCurrentWidget(self.landing_page)
 
+    def _cleanup_staged_backups(self, *, keep_keys: set[str] | None = None) -> list[str]:
+        keep = keep_keys or set()
+        removable = [path for key, path in self._staged_backups.items() if key not in keep]
+        warnings = cleanup_staged_backup_dirs(removable)
+        for key, path in list(self._staged_backups.items()):
+            if key in keep:
+                continue
+            if not path.exists():
+                del self._staged_backups[key]
+        return warnings
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # type: ignore[override]
+        self._cleanup_staged_backups()
+        super().closeEvent(event)
+
     def _open_file_direct(self, selected_files: object) -> None:
-        if isinstance(selected_files, Path):
+        if isinstance(selected_files, (Path, str)):
             raw_files = [selected_files]
         elif isinstance(selected_files, list):
-            raw_files = [Path(path) if isinstance(path, str) else path for path in selected_files if isinstance(path, (Path, str))]
+            raw_files = [path for path in selected_files if isinstance(path, (Path, str))]
         else:
             raw_files = []
-        if not raw_files:
-            return
-
-        files: list[Path] = []
-        seen: set[str] = set()
-        for raw in raw_files:
-            expanded = expand_input_path(raw)
-            key = path_key(expanded)
-            if key in seen:
-                continue
-            seen.add(key)
-            files.append(expanded)
-
-        missing_or_invalid = [path for path in files if not path.exists() or not path.is_file()]
-        valid_files = [path for path in files if path.exists() and path.is_file()]
-        if not valid_files:
+        files = [expand_input_path(path) for path in raw_files]
+        if not files:
             QMessageBox.warning(
                 self,
                 tr("MainWindow", "Invalid file"),
-                tr("MainWindow", "No valid files were selected."),
+                tr("MainWindow", "No files were selected."),
             )
             return
 
-        backup_groups: dict[str, tuple[Path, list[Path]]] = {}
-        resolve_errors: list[str] = []
-        for file_path in valid_files:
-            backup_dir = _resolve_backup_from_file(file_path)
-            if backup_dir is None:
-                resolve_errors.append(f"{file_path.name}: could not locate a Smart Switch backup nearby")
-                continue
-            key = path_key(backup_dir)
-            if key not in backup_groups:
-                backup_groups[key] = (backup_dir, [])
-            backup_groups[key][1].append(file_path)
+        planning = plan_direct_import(files)
+        if planning.plan is None:
+            QMessageBox.warning(
+                self,
+                tr("MainWindow", "Invalid file"),
+                _render_issue_lines(planning.notices),
+            )
+            return
 
-        staging_warnings: list[str] = []
-        if len(backup_groups) == 1 and not resolve_errors:
-            backup_dir, backup_files = next(iter(backup_groups.values()))
-        else:
-            backup_dir, staging_warnings = stage_direct_files_as_backup(valid_files)
-            backup_files = valid_files
+        plan = planning.plan
+        if plan.staged_backup_dir is not None:
+            self._staged_backups[path_key(plan.staged_backup_dir)] = plan.staged_backup_dir
 
-        if not self._open_backup(backup_dir):
+        if not self._open_backup(plan.backup_dir):
+            if plan.staged_backup_dir is not None:
+                self._cleanup_staged_backups()
             return
 
         available_ids = self.explorer_page.model.item_ids()
         selected_item_ids: set[str] = set()
         mapping_issues: list[str] = []
 
-        for file_path in backup_files:
-            item_ids, reason = map_direct_file_to_item_ids(file_path, backup_dir, available_ids)
+        for file_path in plan.backup_files:
+            item_ids, reason = map_direct_file_to_item_ids(file_path, plan.backup_dir, available_ids)
             if item_ids:
                 selected_item_ids.update(item_ids)
                 continue
@@ -188,7 +165,11 @@ class MainWindow(QMainWindow):
 
         applied_item_ids = self.explorer_page.select_leaf_ids(selected_item_ids)
         if not applied_item_ids:
-            details = mapping_issues or [tr("MainWindow", "No supported export items matched the selected files.")]
+            details = [
+                *planning.notices,
+                *plan.notices,
+                *mapping_issues,
+            ] or [tr("MainWindow", "No supported export items matched the selected files.")]
             QMessageBox.warning(
                 self,
                 tr("MainWindow", "Unsupported file"),
@@ -196,14 +177,16 @@ class MainWindow(QMainWindow):
             )
             return
 
-        skipped = [f"{path.name}: file does not exist or is not a regular file" for path in missing_or_invalid]
-        skipped.extend(staging_warnings)
-        skipped.extend(mapping_issues)
-        if skipped:
+        notices = [
+            *planning.notices,
+            *plan.notices,
+            *mapping_issues,
+        ]
+        if notices:
             QMessageBox.information(
                 self,
-                tr("MainWindow", "Some files were skipped"),
-                _render_issue_lines(skipped),
+                tr("MainWindow", "Direct import notes"),
+                _render_issue_lines(notices),
             )
 
         self.explorer_page.open_export_prompt()
@@ -253,6 +236,16 @@ class MainWindow(QMainWindow):
 
         inventory = build_inventory(backup_dir)
         self.current_backup = backup_dir
+        current_key = path_key(backup_dir)
+        cleanup_warnings = self._cleanup_staged_backups(
+            keep_keys={current_key} if current_key in self._staged_backups else set()
+        )
+        if cleanup_warnings:
+            QMessageBox.warning(
+                self,
+                tr("MainWindow", "Cleanup warning"),
+                _render_issue_lines(cleanup_warnings),
+            )
         self.explorer_page.load_inventory(inventory)
         self.explorer_page.set_size_pending()
         self.stack.setCurrentWidget(self.explorer_page)

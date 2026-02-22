@@ -6,6 +6,13 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from smartswitch_core.file_signatures import (
+    MESSAGE_PART_ATTACHMENTS,
+    MESSAGE_PART_MMS,
+    MESSAGE_PART_RCS,
+    MESSAGE_PART_SMS,
+    message_part_keys_from_filename,
+)
 from smartswitch_core.models import Inventory, TreeItem
 
 
@@ -97,13 +104,14 @@ def _message_part_sizes(message_dir: Path) -> dict[str, int]:
         return out
 
     def add_entry(name: str, size: int) -> None:
-        if name.endswith("sms_restore.bk"):
+        parts = message_part_keys_from_filename(name)
+        if MESSAGE_PART_SMS in parts:
             out["sms"] += size
-        if name.endswith("mms_restore.bk"):
+        if MESSAGE_PART_MMS in parts:
             out["mms"] += size
-        if "PART_" in name:
+        if MESSAGE_PART_ATTACHMENTS in parts:
             out["attachments"] += size
-        if ("RCSMESSAGE" in name) or ("RcsMessage" in name):
+        if MESSAGE_PART_RCS in parts:
             out["rcs"] += size
 
     try:

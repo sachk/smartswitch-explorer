@@ -345,7 +345,10 @@ class LandingPage(QWidget):
 
         self.open_file_button = QPushButton(tr("LandingPage", "Open File Directly"))
         self.open_file_button.setToolTip(
-            tr("LandingPage", "Open Smart Switch files directly (.smem, .bk, .data, .penc, .apk, contact CSV/SPBM, CALLLOG.zip)")
+            tr(
+                "LandingPage",
+                "Open Smart Switch files directly (.smem, .bk, .data, .penc, .apk, contact*.csv/contact.spbm, CALLLOG.zip)",
+            )
         )
         picker_row.addWidget(self.open_file_button)
 
@@ -504,7 +507,7 @@ class LandingPage(QWidget):
             "",
             tr(
                 "LandingPage",
-                "Smart Switch Files (*.smem *sms_restore.bk *mms_restore.bk *PART_* *RCSMESSAGE* *RcsMessage* *.data *.penc *.apk *.csv *.spbm CALLLOG.zip);;All Files (*)",
+                "Smart Switch Files (*.smem *sms_restore.bk *mms_restore.bk *PART_* *RCSMESSAGE* *RcsMessage* *.data *.penc *.apk contact*.csv Contact*.csv contact.spbm Contact.spbm CALLLOG.zip);;All Files (*)",
             ),
         )
         if not paths:

@@ -73,6 +73,17 @@ def test_map_direct_file_to_item_ids(tmp_path: Path) -> None:
     assert reason
 
 
+def test_random_csv_is_not_treated_as_contacts(tmp_path: Path) -> None:
+    backup = tmp_path / "backup"
+    backup.mkdir(parents=True)
+    random_csv = backup / "report.csv"
+    random_csv.write_text("a,b\n1,2\n", encoding="utf-8")
+
+    selected, reason = map_direct_file_to_item_ids(random_csv, backup, {"contacts"})
+    assert selected == set()
+    assert "unsupported" in reason
+
+
 def test_map_smem_outside_message_dir(tmp_path: Path) -> None:
     backup = tmp_path / "backup"
     weird_dir = backup / "random" / "nested"
