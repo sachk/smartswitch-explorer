@@ -1,0 +1,88 @@
+name: CI Smoke
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Run tests
+        run: uv run pytest
+
+      - name: CLI smoke
+        run: |
+          uv run smartswitch-explorer --version
+          QT_QPA_PLATFORM=offscreen uv run smartswitch-explorer --smoke-test
+
+  package-smoke:
+    name: Package Smoke (${{ matrix.profile }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            profile: linux-dir
+          - os: macos-14
+            profile: macos-app
+          - os: windows-latest
+            profile: windows-exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Build package smoke target
+        run: uv run --with pyinstaller python scripts/release/build_pyinstaller.py --profile "${{ matrix.profile }}"
+
+      - name: Validate packaged binary
+        shell: bash
+        run: |
+          case "${{ matrix.profile }}" in
+            windows-exe)
+              ./dist/smartswitch-explorer.exe --version
+              ;;
+            macos-app)
+              "./dist/SmartSwitch Explorer.app/Contents/MacOS/SmartSwitch Explorer" --version
+              ;;
+            linux-dir)
+              QT_QPA_PLATFORM=offscreen ./dist/smartswitch-explorer/smartswitch-explorer --smoke-test
+              ;;
+            *)
+              echo "Unknown profile" >&2
+              exit 1
+              ;;
+          esac

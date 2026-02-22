@@ -1,0 +1,304 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  FLATPAK_APP_ID: io.github.sachk.SmartSwitchExplorer
+
+jobs:
+  validate-version:
+    name: Validate Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Resolve project version
+        id: version
+        shell: bash
+        run: |
+          VERSION="$(python scripts/release/version.py)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Validate tag matches pyproject
+        if: startsWith(github.ref, 'refs/tags/')
+        run: python scripts/release/version.py --check-tag "${GITHUB_REF}"
+
+  windows-exe:
+    name: Windows EXE (${{ matrix.arch }})
+    needs: validate-version
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Build portable EXE
+        run: uv run --with pyinstaller python scripts/release/build_pyinstaller.py --profile windows-exe
+
+      - name: Collect artifact
+        shell: bash
+        run: |
+          VERSION="${{ needs.validate-version.outputs.version }}"
+          mkdir -p artifacts
+          cp "dist/smartswitch-explorer.exe" "artifacts/smartswitch-explorer-${VERSION}-windows-${{ matrix.arch }}.exe"
+
+      - name: Smoke test packaged EXE
+        shell: bash
+        run: |
+          VERSION="${{ needs.validate-version.outputs.version }}"
+          ./"artifacts/smartswitch-explorer-${VERSION}-windows-${{ matrix.arch }}.exe" --version
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          VERSION="${{ needs.validate-version.outputs.version }}"
+          python scripts/release/write_sha256.py "artifacts/smartswitch-explorer-${VERSION}-windows-${{ matrix.arch }}.exe"
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}
+          path: artifacts/*
+
+  macos-installers:
+    name: macOS Installers (${{ matrix.arch }})
+    needs: validate-version
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: macos-13
+          - arch: arm64
+            runner: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Build macOS app bundle
+        run: uv run --with pyinstaller python scripts/release/build_pyinstaller.py --profile macos-app
+
+      - name: Smoke test app bundle
+        shell: bash
+        run: |
+          "./dist/SmartSwitch Explorer.app/Contents/MacOS/SmartSwitch Explorer" --version
+
+      - name: Create DMG and PKG
+        shell: bash
+        run: |
+          VERSION="${{ needs.validate-version.outputs.version }}"
+          scripts/release/build_macos_installers.sh "$VERSION" "${{ matrix.arch }}" artifacts
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          VERSION="${{ needs.validate-version.outputs.version }}"
+          python scripts/release/write_sha256.py \
+            "artifacts/smartswitch-explorer-${VERSION}-macos-${{ matrix.arch }}.dmg" \
+            "artifacts/smartswitch-explorer-${VERSION}-macos-${{ matrix.arch }}.pkg"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: artifacts/*
+
+  linux-appimage:
+    name: Linux AppImage (${{ matrix.arch }})
+    needs: validate-version
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Build Linux directory bundle
+        run: uv run --with pyinstaller python scripts/release/build_pyinstaller.py --profile linux-dir
+
+      - name: Smoke test Linux binary
+        shell: bash
+        run: QT_QPA_PLATFORM=offscreen ./dist/smartswitch-explorer/smartswitch-explorer --smoke-test
+
+      - name: Build AppImage
+        shell: bash
+        run: |
+          VERSION="${{ needs.validate-version.outputs.version }}"
+          scripts/release/build_appimage.sh "$VERSION" "${{ matrix.arch }}" artifacts
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          VERSION="${{ needs.validate-version.outputs.version }}"
+          python scripts/release/write_sha256.py "artifacts/smartswitch-explorer-${VERSION}-linux-${{ matrix.arch }}.AppImage"
+
+      - name: Upload AppImage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage-${{ matrix.arch }}
+          path: artifacts/*
+
+  linux-flatpak:
+    name: Linux Flatpak (${{ matrix.arch }})
+    needs: validate-version
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            flatpak_arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            flatpak_arch: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Build Linux directory bundle
+        run: uv run --with pyinstaller python scripts/release/build_pyinstaller.py --profile linux-dir
+
+      - name: Install Flatpak toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+
+      - name: Install Flatpak runtimes
+        run: |
+          flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install -y flathub org.kde.Platform//6.8 org.kde.Sdk//6.8
+
+      - name: Build Flatpak repo
+        shell: bash
+        run: |
+          flatpak-builder \
+            --arch="${{ matrix.flatpak_arch }}" \
+            --force-clean \
+            --repo=repo \
+            build-flatpak \
+            packaging/linux/flatpak/io.github.sachk.SmartSwitchExplorer.yaml
+
+      - name: Bundle Flatpak artifact
+        shell: bash
+        run: |
+          VERSION="${{ needs.validate-version.outputs.version }}"
+          mkdir -p artifacts
+          flatpak build-bundle repo "artifacts/smartswitch-explorer-${VERSION}-linux-${{ matrix.arch }}.flatpak" "$FLATPAK_APP_ID"
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          VERSION="${{ needs.validate-version.outputs.version }}"
+          python scripts/release/write_sha256.py "artifacts/smartswitch-explorer-${VERSION}-linux-${{ matrix.arch }}.flatpak"
+
+      - name: Upload Flatpak artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-flatpak-${{ matrix.arch }}
+          path: artifacts/*
+
+  publish-release:
+    name: Publish GitHub Release
+    needs:
+      - validate-version
+      - windows-exe
+      - macos-installers
+      - linux-appimage
+      - linux-flatpak
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release-artifacts/*
