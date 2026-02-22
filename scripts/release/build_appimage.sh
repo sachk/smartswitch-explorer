@@ -32,6 +32,15 @@ install -Dm644 packaging/linux/smartswitch-explorer.desktop "$appdir/usr/share/a
 install -Dm644 src/gui/assets/app_icon.png "$appdir/usr/share/icons/hicolor/256x256/apps/smartswitch-explorer.png"
 ln -sf "smartswitch-explorer.png" "$appdir/.DirIcon"
 
+# Strip debug symbols from bundled ELF files to reduce AppImage size.
+if command -v strip >/dev/null 2>&1; then
+  while IFS= read -r -d '' candidate; do
+    if file -b "$candidate" | grep -q "ELF"; then
+      strip --strip-unneeded "$candidate" || true
+    fi
+  done < <(find "$appdir/usr/lib/smartswitch-explorer" -type f -print0)
+fi
+
 case "$arch" in
   x86_64)
     tool_url="https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
