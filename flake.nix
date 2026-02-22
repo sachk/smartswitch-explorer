@@ -56,7 +56,11 @@
           unset QT_PLUGIN_PATH
           unset QML2_IMPORT_PATH
 
-          pyside_plugins="$(uv run python -c 'import pathlib, PySide6; print((pathlib.Path(PySide6.__file__).resolve().parent / "Qt" / "plugins").as_posix())')"
+          pyside_plugins="$(uv run python -c 'from PySide6.QtCore import QLibraryInfo; print(QLibraryInfo.path(QLibraryInfo.LibraryPath.PluginsPath) or "")')"
+          if [ -z "$pyside_plugins" ]; then
+            echo "Failed to locate Qt plugins path from PySide6." >&2
+            exit 1
+          fi
           export QT_PLUGIN_PATH="$pyside_plugins"
           export QT_QPA_PLATFORM_PLUGIN_PATH="$pyside_plugins/platforms"
 
