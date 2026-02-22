@@ -6,6 +6,7 @@ from smartswitch_core.direct_file import (
     infer_package_from_apk_filename,
     map_direct_file_to_item_ids,
     message_item_ids_from_filename,
+    stage_direct_files_as_backup,
 )
 
 
@@ -88,3 +89,61 @@ def test_map_smem_outside_message_dir(tmp_path: Path) -> None:
     selected, reason = map_direct_file_to_item_ids(smem, backup, available_ids)
     assert not reason
     assert selected == available_ids
+
+
+def test_map_message_and_app_files_outside_standard_dirs(tmp_path: Path) -> None:
+    backup = tmp_path / "backup"
+    odd = tmp_path / "odd"
+    odd.mkdir(parents=True)
+
+    sms = odd / "!@ssm@!sms_restore.bk"
+    app_data = odd / "com.example.app.data"
+    app_penc = odd / "com.example.app.penc"
+    calllog = odd / "CALLLOG.zip"
+    contacts = odd / "Contact.csv"
+    for path in (sms, app_data, app_penc, calllog, contacts):
+        path.write_bytes(b"x")
+
+    available_ids = {
+        "messages:sms",
+        "app_data:com.example.app",
+        "app_apk:com.example.app",
+        "contacts",
+        "calllog",
+    }
+
+    assert map_direct_file_to_item_ids(sms, backup, available_ids)[0] == {"messages:sms"}
+    assert map_direct_file_to_item_ids(app_data, backup, available_ids)[0] == {"app_data:com.example.app"}
+    assert map_direct_file_to_item_ids(app_penc, backup, available_ids)[0] == {"app_apk:com.example.app"}
+    assert map_direct_file_to_item_ids(calllog, backup, available_ids)[0] == {"calllog"}
+    assert map_direct_file_to_item_ids(contacts, backup, available_ids)[0] == {"contacts"}
+
+
+def test_stage_direct_files_as_backup(tmp_path: Path) -> None:
+    files_dir = tmp_path / "files"
+    files_dir.mkdir(parents=True)
+
+    sms = files_dir / "!@ssm@!sms_restore.bk"
+    sms.write_bytes(b"sms")
+    smem = files_dir / "exported_message.smem"
+    smem.write_bytes(b"smem")
+    app_data = files_dir / "com.example.app.data"
+    app_data.write_bytes(b"data")
+    split_apk = files_dir / "com.example.app_split_config.en.apk"
+    split_apk.write_bytes(b"apk")
+    contacts = files_dir / "Contact.csv"
+    contacts.write_text("Name,Number\nAlice,123\n", encoding="utf-8")
+    calllog = files_dir / "CALLLOG.zip"
+    calllog.write_bytes(b"zip")
+
+    staged, warnings = stage_direct_files_as_backup([sms, smem, app_data, split_apk, contacts, calllog])
+
+    assert staged.exists()
+    assert (staged / "MESSAGE" / "Message.smem").exists()
+    assert any(path.name.endswith("sms_restore.bk") for path in (staged / "MESSAGE").iterdir())
+    assert (staged / "APKFILE" / "com.example.app.data").exists()
+    assert (staged / "APKFILE" / "com.example.app.penc").exists()
+    assert any(path.name.endswith(".apk") for path in (staged / "APKFILE").iterdir())
+    assert (staged / "CONTACT" / "Contact.csv").exists()
+    assert (staged / "CALLLOG" / "CALLLOG.zip").exists()
+    assert isinstance(warnings, list)
