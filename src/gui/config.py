@@ -10,16 +10,28 @@ APP_NAME = "smartswitch-explorer"
 
 
 def _config_dir() -> Path:
-    base = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppConfigLocation)
+    base = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.GenericConfigLocation)
     if not base:
-        base = str(Path.home() / ".config" / APP_NAME)
-    path = Path(base)
+        base = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.ConfigLocation)
+    if not base:
+        base = str(Path.home() / ".config")
+    path = Path(base) / APP_NAME
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
 def _settings_path() -> Path:
     return _config_dir() / "settings.json"
+
+
+def _legacy_settings_path() -> Path | None:
+    legacy_base = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppConfigLocation)
+    if not legacy_base:
+        return None
+    legacy = Path(legacy_base) / "settings.json"
+    if legacy == _settings_path():
+        return None
+    return legacy
 
 
 def default_destination() -> Path:
@@ -32,10 +44,14 @@ def default_destination() -> Path:
 def load_settings() -> dict:
     path = _settings_path()
     if not path.exists():
-        return {
-            "destination": str(default_destination()),
-            "last_backup": "",
-        }
+        legacy_path = _legacy_settings_path()
+        if legacy_path and legacy_path.exists():
+            path = legacy_path
+        else:
+            return {
+                "destination": str(default_destination()),
+                "last_backup": "",
+            }
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
