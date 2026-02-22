@@ -21,7 +21,6 @@ fi
 mkdir -p "$artifacts_dir"
 
 dmg_path="$artifacts_dir/smartswitch-explorer-${version}-macos-${arch}.dmg"
-pkg_path="$artifacts_dir/smartswitch-explorer-${version}-macos-${arch}.pkg"
 
 hdiutil create \
   -volname "SmartSwitch Explorer" \
@@ -30,12 +29,4 @@ hdiutil create \
   -format UDZO \
   "$dmg_path"
 
-pkgbuild \
-  --identifier io.github.sachk.smartswitch-explorer \
-  --version "$version" \
-  --install-location /Applications \
-  --component "$app_path" \
-  "$pkg_path"
-
 echo "Created: $dmg_path"
-echo "Created: $pkg_path"
