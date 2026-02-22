@@ -100,6 +100,7 @@ jobs:
           VERSION="${{ needs.validate-version.outputs.version }}"
           mkdir -p artifacts
           cp "dist/smartswitch-explorer.exe" "artifacts/smartswitch-explorer-${VERSION}-windows-${{ matrix.arch }}.exe"
+          cp "dist/smartswitch-explorer.exe" "artifacts/smartswitch-explorer-windows-${{ matrix.arch }}.exe"
 
       - name: Smoke test packaged EXE
         shell: bash
@@ -111,7 +112,9 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ needs.validate-version.outputs.version }}"
-          python scripts/release/write_sha256.py "artifacts/smartswitch-explorer-${VERSION}-windows-${{ matrix.arch }}.exe"
+          python scripts/release/write_sha256.py \
+            "artifacts/smartswitch-explorer-${VERSION}-windows-${{ matrix.arch }}.exe" \
+            "artifacts/smartswitch-explorer-windows-${{ matrix.arch }}.exe"
 
       - name: Report artifact sizes
         shell: bash
@@ -171,13 +174,17 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent \
             "dist/SmartSwitch Explorer.app" \
             "artifacts/smartswitch-explorer-${VERSION}-macos-universal2.app.zip"
+          cp \
+            "artifacts/smartswitch-explorer-${VERSION}-macos-universal2.app.zip" \
+            "artifacts/smartswitch-explorer-macos-universal2.app.zip"
 
       - name: Generate checksums
         shell: bash
         run: |
           VERSION="${{ needs.validate-version.outputs.version }}"
           python scripts/release/write_sha256.py \
-            "artifacts/smartswitch-explorer-${VERSION}-macos-universal2.app.zip"
+            "artifacts/smartswitch-explorer-${VERSION}-macos-universal2.app.zip" \
+            "artifacts/smartswitch-explorer-macos-universal2.app.zip"
 
       - name: Report artifact sizes
         shell: bash
@@ -273,12 +280,17 @@ jobs:
         run: |
           VERSION="${{ needs.validate-version.outputs.version }}"
           scripts/release/build_appimage.sh "$VERSION" "${{ matrix.arch }}" artifacts
+          cp \
+            "artifacts/smartswitch-explorer-${VERSION}-linux-${{ matrix.arch }}.AppImage" \
+            "artifacts/smartswitch-explorer-linux-${{ matrix.arch }}.AppImage"
 
       - name: Generate checksums
         shell: bash
         run: |
           VERSION="${{ needs.validate-version.outputs.version }}"
-          python scripts/release/write_sha256.py "artifacts/smartswitch-explorer-${VERSION}-linux-${{ matrix.arch }}.AppImage"
+          python scripts/release/write_sha256.py \
+            "artifacts/smartswitch-explorer-${VERSION}-linux-${{ matrix.arch }}.AppImage" \
+            "artifacts/smartswitch-explorer-linux-${{ matrix.arch }}.AppImage"
 
       - name: Report artifact sizes
         shell: bash
