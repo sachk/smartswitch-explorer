@@ -1,15 +1,16 @@
 <h1 align="center">SmartSwitch Explorer</h1>
 <p align="center">Desktop app for finding encrypted Samsung Smart Switch backups and exporting their contents.</p>
+<p align="center"><strong>Downloads</strong></p>
 <p align="center">
-  <a href="https://github.com/sachk/smartswitch-explorer/releases/latest/download/smartswitch-explorer-windows-x64.exe"><strong>Download .exe</strong></a>
+  <a href="https://github.com/sachk/smartswitch-explorer/releases/latest/download/smartswitch-explorer-windows-x64.exe"><strong>Windows (.exe)</strong></a>
   ·
-  <a href="https://github.com/sachk/smartswitch-explorer/releases/latest/download/smartswitch-explorer-macos-universal2.app.zip"><strong>Download .app</strong></a>
+  <a href="https://github.com/sachk/smartswitch-explorer/releases/latest/download/smartswitch-explorer-macos-universal2.dmg"><strong>Mac OS (.dmg)</strong></a>
   ·
-  <a href="https://github.com/sachk/smartswitch-explorer/releases/latest/download/smartswitch-explorer-linux-x86_64.AppImage"><strong>Download AppImage (x86_64)</strong></a>
+  <a href="https://github.com/sachk/smartswitch-explorer/releases/latest/download/smartswitch-explorer-linux-x86_64.AppImage"><strong>Linux (x64 AppImage)</strong></a>
   ·
-  <a href="https://github.com/sachk/smartswitch-explorer/releases/latest/download/smartswitch-explorer-linux-aarch64.AppImage"><strong>Download AppImage (aarch64)</strong></a>
+  <a href="https://github.com/sachk/smartswitch-explorer/releases/latest/download/smartswitch-explorer-linux-aarch64.AppImage"><strong>Linux (aarch64 AppImage)</strong></a>
   ·
-  <a href="https://github.com/sachk/smartswitch-explorer/releases/latest"><strong>Other Downloads</strong></a>
+  <a href="https://github.com/sachk/smartswitch-explorer/releases/latest"><strong>Other</strong></a>
 </p>
 
 SmartSwitch Explorer is a desktop app for finding encrypted Samsung Smart Switch backups and exporting decrypted contents:
