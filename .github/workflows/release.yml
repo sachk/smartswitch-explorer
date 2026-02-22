@@ -12,7 +12,6 @@ permissions:
 env:
   FLATPAK_APP_ID: io.github.sachk.SmartSwitchExplorer
   UPX_VERSION: "5.1.0"
-  PYINSTALLER_FORCE_UPX: "1"
 
 jobs:
   validate-version:
@@ -44,6 +43,8 @@ jobs:
     name: Windows EXE (${{ matrix.arch }})
     needs: validate-version
     runs-on: ${{ matrix.runner }}
+    env:
+      PYINSTALLER_FORCE_UPX: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -144,17 +145,6 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install UPX
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! command -v upx >/dev/null 2>&1; then
-            brew install upx
-          fi
-          upx --version
-          echo "UPX_DIR=$(dirname "$(command -v upx)")" >> "$GITHUB_ENV"
-
       - name: Sync dependencies
         run: uv sync
 
@@ -239,28 +229,6 @@ jobs:
             libsm6 \
             libice6 \
             libfontconfig1
-
-      - name: Install UPX
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "${{ matrix.arch }}" in
-            x86_64) upx_arch="amd64" ;;
-            aarch64) upx_arch="arm64" ;;
-            *) echo "Unsupported UPX architecture: ${{ matrix.arch }}" >&2; exit 1 ;;
-          esac
-          archive="upx-${{ env.UPX_VERSION }}-${upx_arch}_linux.tar.xz"
-          upx_root="$RUNNER_TEMP/upx-${{ env.UPX_VERSION }}-${upx_arch}_linux"
-          curl -fsSL "https://github.com/upx/upx/releases/download/v${{ env.UPX_VERSION }}/${archive}" -o "$RUNNER_TEMP/$archive"
-          tar -xJf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP"
-          if [ ! -x "$upx_root/upx" ]; then
-            echo "UPX binary not found in extracted archive: $upx_root/upx" >&2
-            exit 1
-          fi
-          "$upx_root/upx" --version
-          echo "$upx_root" >> "$GITHUB_PATH"
-          echo "UPX_DIR=$upx_root" >> "$GITHUB_ENV"
 
       - name: Sync dependencies
         run: uv sync
@@ -347,28 +315,6 @@ jobs:
             libsm6 \
             libice6 \
             libfontconfig1
-
-      - name: Install UPX
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "${{ matrix.arch }}" in
-            x86_64) upx_arch="amd64" ;;
-            aarch64) upx_arch="arm64" ;;
-            *) echo "Unsupported UPX architecture: ${{ matrix.arch }}" >&2; exit 1 ;;
-          esac
-          archive="upx-${{ env.UPX_VERSION }}-${upx_arch}_linux.tar.xz"
-          upx_root="$RUNNER_TEMP/upx-${{ env.UPX_VERSION }}-${upx_arch}_linux"
-          curl -fsSL "https://github.com/upx/upx/releases/download/v${{ env.UPX_VERSION }}/${archive}" -o "$RUNNER_TEMP/$archive"
-          tar -xJf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP"
-          if [ ! -x "$upx_root/upx" ]; then
-            echo "UPX binary not found in extracted archive: $upx_root/upx" >&2
-            exit 1
-          fi
-          "$upx_root/upx" --version
-          echo "$upx_root" >> "$GITHUB_PATH"
-          echo "UPX_DIR=$upx_root" >> "$GITHUB_ENV"
 
       - name: Sync dependencies
         run: uv sync

@@ -8,7 +8,6 @@ on:
 
 env:
   UPX_VERSION: "5.1.0"
-  PYINSTALLER_FORCE_UPX: "1"
 
 jobs:
   tests:
@@ -47,62 +46,6 @@ jobs:
             libsm6 \
             libice6 \
             libfontconfig1
-
-      - name: Install UPX (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $upxVersion = "${{ env.UPX_VERSION }}"
-          $extractRoot = "$env:RUNNER_TEMP\upx"
-          $upxExe = $null
-          foreach ($asset in @("win64", "win32")) {
-            $archive = "$env:RUNNER_TEMP\upx-$asset.zip"
-            $assetRoot = Join-Path $extractRoot $asset
-            Invoke-WebRequest -Uri "https://github.com/upx/upx/releases/download/v$upxVersion/upx-$upxVersion-$asset.zip" -OutFile $archive
-            Expand-Archive -Path $archive -DestinationPath $assetRoot -Force
-            $candidate = Get-ChildItem -Path $assetRoot -Recurse -Filter upx.exe | Select-Object -First 1
-            if (-not $candidate) { continue }
-            & $candidate.FullName --version
-            if ($LASTEXITCODE -eq 0) {
-              $upxExe = $candidate
-              break
-            }
-          }
-          if (-not $upxExe) { throw "No runnable UPX binary found after extraction." }
-          "UPX_DIR=$($upxExe.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Install UPX (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! command -v upx >/dev/null 2>&1; then
-            brew install upx
-          fi
-          upx --version
-          echo "UPX_DIR=$(dirname "$(command -v upx)")" >> "$GITHUB_ENV"
-
-      - name: Install UPX (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "$(uname -m)" in
-            x86_64) upx_arch="amd64" ;;
-            aarch64|arm64) upx_arch="arm64" ;;
-            *) echo "Unsupported UPX architecture: $(uname -m)" >&2; exit 1 ;;
-          esac
-          archive="upx-${{ env.UPX_VERSION }}-${upx_arch}_linux.tar.xz"
-          upx_root="$RUNNER_TEMP/upx-${{ env.UPX_VERSION }}-${upx_arch}_linux"
-          curl -fsSL "https://github.com/upx/upx/releases/download/v${{ env.UPX_VERSION }}/${archive}" -o "$RUNNER_TEMP/$archive"
-          tar -xJf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP"
-          if [ ! -x "$upx_root/upx" ]; then
-            echo "UPX binary not found in extracted archive: $upx_root/upx" >&2
-            exit 1
-          fi
-          "$upx_root/upx" --version
-          echo "$upx_root" >> "$GITHUB_PATH"
-          echo "UPX_DIR=$upx_root" >> "$GITHUB_ENV"
 
       - name: Sync dependencies
         run: uv sync
@@ -164,10 +107,35 @@ jobs:
             libice6 \
             libfontconfig1
 
+      - name: Install UPX (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $upxVersion = "${{ env.UPX_VERSION }}"
+          $extractRoot = "$env:RUNNER_TEMP\upx"
+          $upxExe = $null
+          foreach ($asset in @("win64", "win32")) {
+            $archive = "$env:RUNNER_TEMP\upx-$asset.zip"
+            $assetRoot = Join-Path $extractRoot $asset
+            Invoke-WebRequest -Uri "https://github.com/upx/upx/releases/download/v$upxVersion/upx-$upxVersion-$asset.zip" -OutFile $archive
+            Expand-Archive -Path $archive -DestinationPath $assetRoot -Force
+            $candidate = Get-ChildItem -Path $assetRoot -Recurse -Filter upx.exe | Select-Object -First 1
+            if (-not $candidate) { continue }
+            & $candidate.FullName --version
+            if ($LASTEXITCODE -eq 0) {
+              $upxExe = $candidate
+              break
+            }
+          }
+          if (-not $upxExe) { throw "No runnable UPX binary found after extraction." }
+          "UPX_DIR=$($upxExe.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Sync dependencies
         run: uv sync
 
       - name: Build package smoke target
+        env:
+          PYINSTALLER_FORCE_UPX: ${{ matrix.profile == 'windows-exe' && '1' || '0' }}
         run: uv run --with pyinstaller python scripts/release/build_pyinstaller.py --profile "${{ matrix.profile }}"
 
       - name: Validate packaged binary
