@@ -10,8 +10,7 @@ MIB = 1024 * 1024
 SIZE_BUDGETS_BYTES: tuple[tuple[str, int], ...] = (
     ("-windows-x64.exe", 220 * MIB),
     ("-windows-arm64.exe", 190 * MIB),
-    ("-macos-universal2.dmg", 600 * MIB),
-    ("-macos-universal2.pkg", 560 * MIB),
+    ("-macos-universal2.app.zip", 560 * MIB),
     ("-linux-x86_64.AppImage", 190 * MIB),
     ("-linux-aarch64.AppImage", 190 * MIB),
     ("-linux-x86_64.flatpak", 150 * MIB),
