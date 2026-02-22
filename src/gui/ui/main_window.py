@@ -14,7 +14,7 @@ from smartswitch_core.additional_export import (
     export_watch_backup,
 )
 from smartswitch_core.applications.decrypt_extract import copy_app_apk_payload, decrypt_extract_app
-from smartswitch_core.direct_file import map_direct_file_to_item_ids, path_key
+from smartswitch_core.direct_file import map_direct_file_to_item_ids, path_key, stage_direct_files_as_backup
 from smartswitch_core.export import make_export_root
 from smartswitch_core.messages.decode import decode_and_export_messages
 from smartswitch_core.metadata import enrich_inventory
@@ -165,27 +165,13 @@ class MainWindow(QMainWindow):
                 backup_groups[key] = (backup_dir, [])
             backup_groups[key][1].append(file_path)
 
-        if not backup_groups:
-            details = resolve_errors or [tr("MainWindow", "Could not locate a Smart Switch backup near the selected file.")]
-            QMessageBox.warning(
-                self,
-                tr("MainWindow", "Invalid backup"),
-                _render_issue_lines(details),
-            )
-            return
+        staging_warnings: list[str] = []
+        if len(backup_groups) == 1 and not resolve_errors:
+            backup_dir, backup_files = next(iter(backup_groups.values()))
+        else:
+            backup_dir, staging_warnings = stage_direct_files_as_backup(valid_files)
+            backup_files = valid_files
 
-        if len(backup_groups) > 1:
-            lines = [tr("MainWindow", "Please select files from a single backup at a time.")]
-            for backup_dir, backup_files in backup_groups.values():
-                lines.append(f"{backup_dir.name}: {len(backup_files)} file(s)")
-            QMessageBox.warning(
-                self,
-                tr("MainWindow", "Multiple backups selected"),
-                _render_issue_lines(lines),
-            )
-            return
-
-        backup_dir, backup_files = next(iter(backup_groups.values()))
         if not self._open_backup(backup_dir):
             return
 
@@ -211,7 +197,7 @@ class MainWindow(QMainWindow):
             return
 
         skipped = [f"{path.name}: file does not exist or is not a regular file" for path in missing_or_invalid]
-        skipped.extend(resolve_errors)
+        skipped.extend(staging_warnings)
         skipped.extend(mapping_issues)
         if skipped:
             QMessageBox.information(
