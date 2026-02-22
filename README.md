@@ -1,87 +1,37 @@
 # SmartSwitch Explorer
 
-Native desktop app (PySide6 + Qt widgets) for exploring Samsung Smart Switch backups.
+SmartSwitch Explorer is a desktop app for finding encrpyted Samsung Smart Switch backups and exporting the decrypted contents:
 
-## Scope (v1)
-
-- Messages
-- Applications
+- Messages (CSV or JSON)
+- Applications (extracted data + APKs)
 - Photos and videos
-- Galaxy Watch backups
 - Contacts
 - Call log
-- Storage and settings categories
-- Other backup categories (raw copy + zip extraction when present)
-- Encrypted Smart Switch artifacts (shared IV-prefix AES decoder)
+- Galaxy Watch backups
+- Storage, settings, and other backup categories
 
-## Key behavior
-
-- Inventory is built from filesystem structure only.
-- No decode/decrypt runs before a user action.
-- Metadata enrichment (pretty app names/icons, backup labels) is optional and async.
-- Tree sections are collapsed by default.
-- `Media -> Photos` exports both `Photo` and `PHOTO_ORIGIN`.
-- `Media -> Videos` exports both `Video` and `VIDEO_ORIGIN`.
-- Auto-detection checks Smart Switch roots under:
-  - `%USERPROFILE%/Samsung/SmartSwitch` (Windows)
-  - `%USERPROFILE%/Documents/Samsung/SmartSwitch` (Windows)
-  - `~/Documents/Samsung/SmartSwitch` (macOS/Linux)
-- If you select a parent like `USERPROFILE`, `Documents`, or `Samsung`, scanning auto-traverses into `.../SmartSwitch` (and `backup`/`Backups` when present).
-
-## Layout
-
-- `src/gui`: GUI app code.
-- `lib/smartswitch_core`: reusable scanning/decode/extract libraries.
-
-## Setup
+## Running from source
 
 ```bash
 uv sync
-```
-
-If your environment blocks network access, dependency installation may fail.
-
-## Run
-
-```bash
 uv run smartswitch-explorer
 ```
 
-## NixOS Dev Shell
+### Nix:
 
 ```bash
-nix develop
+nix run github:sachk/smartswitch-explorer
 ```
 
-The flake dev shell initializes `.venv`, runs `uv sync`, and exports `LD_LIBRARY_PATH`
-with `libGL` and required Qt/X11 runtime libraries for PySide6.
+## How to use
 
-## Run via Nix
+1. Launch the app.
+2. Pick a folder that contains backups, or a parent folder like a mounted home directory, `Documents`, or `Samsung`.
+3. Select a detected backup.
+4. Choose what to export.
+5. Set the destination folder and click **Export Selected**.
 
-```bash
-nix run
-```
+Additional format docs:
 
-This directly runs `uv run smartswitch-explorer` with the same runtime library setup.
-
-## Tests
-
-```bash
-uv run pytest
-```
-
-## Export output
-
-Exports are written to:
-
-`<destination>/<backup_id>/...`
-
-Default destination:
-
-`~/Documents/SmartSwitch Extracted Backups`
-
-## Format notes
-
-- Call log decryption details: `docs/calllog_format.md`
-- Encrypted format coverage: `docs/encrypted_formats.md`
-- Localization setup: `docs/localization.md`
+- `docs/calllog_format.md`
+- `docs/encrypted_formats.md`
