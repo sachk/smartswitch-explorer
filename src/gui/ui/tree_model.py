@@ -4,11 +4,14 @@ from PySide6.QtCore import QSortFilterProxyModel, Qt
 from PySide6.QtGui import QIcon, QStandardItem, QStandardItemModel
 
 from smartswitch_core.models import EnrichmentPatch, Inventory, TreeItem
+from smartswitch_core.sizes import format_bytes
 from gui.localization import translate_tree_header, translate_tree_label
 
 ROLE_ID = Qt.ItemDataRole.UserRole + 1
 ROLE_KIND = Qt.ItemDataRole.UserRole + 2
 ROLE_PACKAGE = Qt.ItemDataRole.UserRole + 3
+ROLE_BASE_LABEL = Qt.ItemDataRole.UserRole + 4
+ROLE_SIZE_BYTES = Qt.ItemDataRole.UserRole + 5
 
 
 class TreeFilterProxyModel(QSortFilterProxyModel):
@@ -66,7 +69,7 @@ class InventoryTreeModel(QStandardItemModel):
                 {
                     "id": item_id,
                     "kind": item.data(ROLE_KIND),
-                    "label": item.text(),
+                    "label": item.data(ROLE_BASE_LABEL) or item.text(),
                     "package_id": item.data(ROLE_PACKAGE) or "",
                 }
             )
@@ -78,17 +81,46 @@ class InventoryTreeModel(QStandardItemModel):
             if item is None:
                 continue
             if update.label:
-                item.setText(update.label)
+                item.setData(update.label, ROLE_BASE_LABEL)
+                self._refresh_item_text(item)
             if update.icon_path:
                 item.setIcon(QIcon(str(update.icon_path)))
 
+    def apply_sizes(self, sizes: dict[str, int]) -> None:
+        for item_id, size in sizes.items():
+            item = self._item_by_id.get(item_id)
+            if item is None:
+                continue
+            item.setData(max(0, int(size)), ROLE_SIZE_BYTES)
+            self._refresh_item_text(item)
+
+    def item_ids(self) -> set[str]:
+        return set(self._item_by_id.keys())
+
+    def set_checked_leaf_ids(self, item_ids: set[str]) -> None:
+        self._suspend = True
+        try:
+            for item in self._item_by_id.values():
+                item.setCheckState(Qt.CheckState.Unchecked)
+
+            for item_id in item_ids:
+                item = self._item_by_id.get(item_id)
+                if item is None or item.hasChildren():
+                    continue
+                item.setCheckState(Qt.CheckState.Checked)
+                self._update_parents(item)
+        finally:
+            self._suspend = False
+
     def _to_item(self, node: TreeItem) -> QStandardItem:
-        item = QStandardItem(translate_tree_label(node.kind, node.label))
+        base_label = translate_tree_label(node.kind, node.label)
+        item = QStandardItem(base_label)
         item.setCheckable(True)
         item.setEditable(False)
         item.setData(node.id, ROLE_ID)
         item.setData(node.kind, ROLE_KIND)
         item.setData(node.package_id, ROLE_PACKAGE)
+        item.setData(base_label, ROLE_BASE_LABEL)
         item.setCheckState(Qt.CheckState.Unchecked)
         if node.icon_path:
             item.setIcon(QIcon(str(node.icon_path)))
@@ -99,6 +131,14 @@ class InventoryTreeModel(QStandardItemModel):
             item.appendRow(self._to_item(child))
 
         return item
+
+    def _refresh_item_text(self, item: QStandardItem) -> None:
+        base_label = str(item.data(ROLE_BASE_LABEL) or item.text())
+        size_bytes = item.data(ROLE_SIZE_BYTES)
+        if isinstance(size_bytes, int):
+            item.setText(f"{base_label} ({format_bytes(size_bytes)})")
+            return
+        item.setText(base_label)
 
     def _on_item_changed(self, item: QStandardItem) -> None:
         if self._suspend:
