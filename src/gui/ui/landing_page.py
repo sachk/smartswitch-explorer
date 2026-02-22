@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import textwrap
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal, QThreadPool
 from PySide6.QtGui import QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -26,7 +27,8 @@ from PySide6.QtWidgets import (
 )
 
 from gui.localization import tr
-from smartswitch_core.scan import discover_backup_roots, find_backups
+from gui.ui.workers import FunctionWorker
+from smartswitch_core.scan import discover_backup_roots, expand_input_path, find_backups
 
 
 class BackupListWidget(QListWidget):
@@ -35,6 +37,21 @@ class BackupListWidget(QListWidget):
             self.clearSelection()
             self.setCurrentItem(None)
         super().mousePressEvent(event)
+
+
+@dataclass(frozen=True)
+class BackupRowModel:
+    backup_path: Path
+    display_name: str
+    model_name: str
+    icon_path: Path | None
+
+
+def _path_key(path: Path) -> str:
+    try:
+        return str(path.resolve(strict=False)).casefold()
+    except OSError:
+        return str(path).casefold()
 
 
 def _backup_title_and_model(backup_dir: Path) -> tuple[str, str]:
@@ -81,10 +98,109 @@ def _backup_icon_path(backup_dir: Path) -> Path | None:
     return None
 
 
+def _build_backup_row(backup_dir: Path) -> BackupRowModel:
+    display_name, model_name = _backup_title_and_model(backup_dir)
+    return BackupRowModel(
+        backup_path=backup_dir,
+        display_name=display_name,
+        model_name=model_name,
+        icon_path=_backup_icon_path(backup_dir),
+    )
+
+
+def _discover_backup_rows(
+    recent_hints: list[Path],
+    *,
+    progress=None,
+    set_status=None,
+    cancel_token=None,
+) -> list[BackupRowModel]:
+    roots: list[Path] = []
+    seen_roots: set[str] = set()
+
+    for hint in recent_hints:
+        if not hint.exists():
+            continue
+        key = _path_key(hint)
+        if key in seen_roots:
+            continue
+        seen_roots.add(key)
+        roots.append(hint)
+
+    for root in discover_backup_roots():
+        key = _path_key(root)
+        if key in seen_roots:
+            continue
+        seen_roots.add(key)
+        roots.append(root)
+
+    backups: list[Path] = []
+    seen_backups: set[str] = set()
+    total_roots = max(1, len(roots))
+    for index, root in enumerate(roots, start=1):
+        if set_status is not None:
+            set_status(f"Scanning {root}")
+        if progress is not None:
+            progress(
+                {
+                    "operation": "listing",
+                    "phase_key": "scan_roots",
+                    "phase_label": "Scanning backup roots",
+                    "current": index,
+                    "total": total_roots,
+                    "unit": "roots",
+                    "detail": str(root),
+                }
+            )
+        for backup in find_backups(root):
+            key = _path_key(backup.path)
+            if key in seen_backups:
+                continue
+            seen_backups.add(key)
+            backups.append(backup.path)
+
+    rows: list[BackupRowModel] = []
+    total_backups = max(1, len(backups))
+    for index, backup in enumerate(backups, start=1):
+        row = _build_backup_row(backup)
+        rows.append(row)
+        if set_status is not None:
+            set_status(f"Preparing {backup.name}")
+        if progress is not None:
+            progress(
+                {
+                    "operation": "listing",
+                    "phase_key": "build_rows",
+                    "phase_label": "Preparing backup cards",
+                    "current": index,
+                    "total": total_backups,
+                    "unit": "backups",
+                    "detail": row.display_name,
+                }
+            )
+
+    if not rows and progress is not None:
+        progress(
+            {
+                "operation": "listing",
+                "phase_key": "build_rows",
+                "phase_label": "Preparing backup cards",
+                "current": 1,
+                "total": 1,
+                "unit": "backups",
+                "detail": "No backups detected",
+            }
+        )
+
+    return rows
+
+
 class BackupListItemWidget(QWidget):
-    def __init__(self, backup_dir: Path, parent: QWidget | None = None) -> None:
+    def __init__(self, row_data: BackupRowModel, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        display_name, model_name = _backup_title_and_model(backup_dir)
+        backup_dir = row_data.backup_path
+        display_name = row_data.display_name
+        model_name = row_data.model_name
         title = f"{display_name} ({model_name})" if model_name else display_name
 
         outer = QHBoxLayout(self)
@@ -93,7 +209,7 @@ class BackupListItemWidget(QWidget):
 
         self.icon_label = QLabel()
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon_path = _backup_icon_path(backup_dir)
+        icon_path = row_data.icon_path
         raw_icon = QPixmap(str(icon_path)) if icon_path else QPixmap()
         if not raw_icon.isNull():
             self._icon_source = raw_icon
@@ -145,10 +261,18 @@ class BackupListItemWidget(QWidget):
 
 class LandingPage(QWidget):
     backup_selected = Signal(Path)
+    listing_started = Signal()
+    listing_progress = Signal(object)
+    listing_status = Signal(str)
+    listing_finished = Signal()
+    listing_error = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
         self._recent_backup_hints: list[Path] = []
+        self._refresh_running = False
+        self._refresh_pending = False
+        self._thread_pool = QThreadPool(self)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -336,65 +460,70 @@ class LandingPage(QWidget):
         return QIcon(tinted)
 
     def set_recent_backups(self, paths: list[Path]) -> None:
-        self._recent_backup_hints = [path.expanduser() for path in paths]
+        self._recent_backup_hints = [expand_input_path(path) for path in paths]
 
     def set_path_text(self, path: Path) -> None:
-        self.path_input.setText(str(path.expanduser()))
+        self.path_input.setText(str(expand_input_path(path)))
 
     def _add_recent_hint(self, path: Path) -> None:
-        expanded = path.expanduser()
+        expanded = expand_input_path(path)
         deduped = [expanded]
         deduped.extend([hint for hint in self._recent_backup_hints if hint != expanded])
         self._recent_backup_hints = deduped[:6]
 
     def refresh(self) -> None:
+        if self._refresh_running:
+            self._refresh_pending = True
+            return
+        self._refresh_running = True
+        self.listing_started.emit()
+        worker = FunctionWorker(
+            _discover_backup_rows,
+            list(self._recent_backup_hints),
+            enable_progress=True,
+        )
+        worker.signals.progress.connect(self.listing_progress.emit)
+        worker.signals.status.connect(self.listing_status.emit)
+        worker.signals.result.connect(self._on_refresh_result)
+        worker.signals.error.connect(self._on_refresh_error)
+        self._thread_pool.start(worker)
+
+    def _on_refresh_result(self, rows: list[BackupRowModel]) -> None:
         self.backup_list.clear()
-        count = 0
-        seen: set[Path] = set()
+        for row_data in rows:
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, str(row_data.backup_path))
+            row = BackupListItemWidget(row_data, self.backup_list)
+            item.setSizeHint(QSize(row.sizeHint().width(), max(80, row.sizeHint().height())))
+            self.backup_list.addItem(item)
+            self.backup_list.setItemWidget(item, row)
 
-        for hint in self._recent_backup_hints:
-            if not hint.exists():
-                continue
-            for backup in find_backups(hint):
-                resolved = backup.path.resolve()
-                if resolved in seen:
-                    continue
-                seen.add(resolved)
-                item = QListWidgetItem()
-                item.setData(Qt.ItemDataRole.UserRole, str(backup.path))
-                row = BackupListItemWidget(backup.path, self.backup_list)
-                item.setSizeHint(QSize(row.sizeHint().width(), max(80, row.sizeHint().height())))
-                self.backup_list.addItem(item)
-                self.backup_list.setItemWidget(item, row)
-                count += 1
-
-        for root in discover_backup_roots():
-            for backup in find_backups(root):
-                resolved = backup.path.resolve()
-                if resolved in seen:
-                    continue
-                seen.add(resolved)
-                item = QListWidgetItem()
-                item.setData(Qt.ItemDataRole.UserRole, str(backup.path))
-                row = BackupListItemWidget(backup.path, self.backup_list)
-                item.setSizeHint(QSize(row.sizeHint().width(), max(80, row.sizeHint().height())))
-                self.backup_list.addItem(item)
-                self.backup_list.setItemWidget(item, row)
-                count += 1
-
-        if count == 0:
+        if not rows:
             self.backup_list.hide()
             self.empty_state.show()
-            return
+        else:
+            self.empty_state.hide()
+            self.backup_list.show()
 
-        self.empty_state.hide()
-        self.backup_list.show()
+        self._refresh_running = False
+        self.listing_finished.emit()
+        if self._refresh_pending:
+            self._refresh_pending = False
+            self.refresh()
+
+    def _on_refresh_error(self, message: str) -> None:
+        self._refresh_running = False
+        self.listing_error.emit(message)
+        self.listing_finished.emit()
+        if self._refresh_pending:
+            self._refresh_pending = False
+            self.refresh()
 
     def _open_folder_dialog(self) -> None:
         path = QFileDialog.getExistingDirectory(self, tr("LandingPage", "Select Backup Folder"))
         if not path:
             return
-        selected = Path(path).expanduser()
+        selected = expand_input_path(path)
         self.path_input.setText(str(selected))
         self._add_recent_hint(selected)
         self.refresh()
@@ -403,7 +532,8 @@ class LandingPage(QWidget):
         raw_path = self.path_input.text().strip()
         if not raw_path:
             return
-        selected = Path(raw_path).expanduser()
+        selected = expand_input_path(raw_path)
+        self.path_input.setText(str(selected))
         self._add_recent_hint(selected)
         self.refresh()
 
