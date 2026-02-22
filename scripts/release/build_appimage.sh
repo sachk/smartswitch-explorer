@@ -56,10 +56,26 @@ esac
 
 mkdir -p "$artifacts_dir"
 output="$artifacts_dir/smartswitch-explorer-${version}-linux-${arch}.AppImage"
+appimage_comp="${APPIMAGE_COMP:-zstd}"
+appimage_zstd_level="${APPIMAGE_ZSTD_LEVEL:-18}"
 
 tool_path="/tmp/appimagetool-${arch}.AppImage"
 curl -fsSL "$tool_url" -o "$tool_path"
 chmod +x "$tool_path"
-ARCH="$arch" "$tool_path" --appimage-extract-and-run "$appdir" "$output"
+
+appimagetool_args=(--appimage-extract-and-run --comp "$appimage_comp")
+compression_label="$appimage_comp"
+if [[ "$appimage_comp" == "zstd" ]]; then
+  appimagetool_args+=(
+    --mksquashfs-opt
+    -Xcompression-level
+    --mksquashfs-opt
+    "$appimage_zstd_level"
+  )
+  compression_label="$appimage_comp level $appimage_zstd_level"
+fi
+
+echo "AppImage squashfs compression: $compression_label"
+ARCH="$arch" "$tool_path" "${appimagetool_args[@]}" "$appdir" "$output"
 
 echo "Created: $output"
