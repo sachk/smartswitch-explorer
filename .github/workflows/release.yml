@@ -289,13 +289,14 @@ jobs:
 
       - name: Install Flatpak runtimes
         run: |
-          flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-          flatpak install -y flathub org.kde.Platform//6.8 org.kde.Sdk//6.8
+          flatpak --user remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak --user install -y flathub org.kde.Platform//6.8 org.kde.Sdk//6.8
 
       - name: Build Flatpak repo
         shell: bash
         run: |
           flatpak-builder \
+            --user \
             --arch="${{ matrix.flatpak_arch }}" \
             --force-clean \
             --repo=repo \
