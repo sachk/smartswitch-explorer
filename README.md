@@ -22,6 +22,11 @@ Native desktop app (PySide6 + Qt widgets) for exploring Samsung Smart Switch bac
 - Tree sections are collapsed by default.
 - `Media -> Photos` exports both `Photo` and `PHOTO_ORIGIN`.
 - `Media -> Videos` exports both `Video` and `VIDEO_ORIGIN`.
+- Auto-detection checks Smart Switch roots under:
+  - `%USERPROFILE%/Samsung/SmartSwitch` (Windows)
+  - `%USERPROFILE%/Documents/Samsung/SmartSwitch` (Windows)
+  - `~/Documents/Samsung/SmartSwitch` (macOS/Linux)
+- If you select a parent like `USERPROFILE`, `Documents`, or `Samsung`, scanning auto-traverses into `.../SmartSwitch` (and `backup`/`Backups` when present).
 
 ## Layout
 
