@@ -14,11 +14,13 @@ from smartswitch_core.additional_export import (
     export_watch_backup,
 )
 from smartswitch_core.applications.decrypt_extract import copy_app_apk_payload, decrypt_extract_app
+from smartswitch_core.direct_file import map_direct_file_to_item_ids, path_key
 from smartswitch_core.export import make_export_root
 from smartswitch_core.messages.decode import decode_and_export_messages
 from smartswitch_core.metadata import enrich_inventory
 from smartswitch_core.other_export import export_other_entry, export_settings_entry, export_storage_entry
 from smartswitch_core.scan import build_inventory, expand_input_path, find_backups, is_backup_dir
+from smartswitch_core.sizes import InventorySizeResult, compute_inventory_sizes
 from gui.config import load_settings, save_settings
 from gui.localization import tr
 from gui.ui.explorer_page import ExplorerPage
@@ -27,11 +29,51 @@ from gui.ui.progress_overlay import ProgressOverlay
 from gui.ui.workers import CancelToken, FunctionWorker
 
 
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve(strict=False) == right.resolve(strict=False)
+    except OSError:
+        return left == right
+
+
+def _render_issue_lines(lines: list[str], *, limit: int = 10) -> str:
+    if len(lines) <= limit:
+        return "\n".join(lines)
+    remaining = len(lines) - limit
+    return "\n".join([*lines[:limit], f"... and {remaining} more"])
+
+
+def _resolve_backup_from_file(file_path: Path) -> Path | None:
+    if not file_path.exists() or not file_path.is_file():
+        return None
+
+    parents_to_try = [file_path.parent]
+    if file_path.parent.parent != file_path.parent:
+        parents_to_try.append(file_path.parent.parent)
+    if file_path.parent.parent.parent != file_path.parent.parent:
+        parents_to_try.append(file_path.parent.parent.parent)
+
+    seen: set[str] = set()
+    for parent in parents_to_try:
+        key = str(parent).casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+
+        if is_backup_dir(parent):
+            return parent
+        backups = find_backups(parent)
+        if backups:
+            return backups[0].path
+
+    return None
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(tr("MainWindow", "SmartSwitch Explorer"))
-        self.resize(QSize(544, 720))
+        self.resize(QSize(500, 720))
 
         self.thread_pool = QThreadPool(self)
         self.settings = load_settings()
@@ -55,6 +97,9 @@ class MainWindow(QMainWindow):
         self.landing_page.listing_status.connect(self._on_listing_status)
         self.landing_page.listing_error.connect(self._on_listing_error)
         self.landing_page.listing_finished.connect(self._on_listing_finished)
+        self.landing_page.path_committed.connect(self._remember_scan_path)
+        self.landing_page.file_selected.connect(self._open_file_direct)
+        self.explorer_page.back_requested.connect(self._return_to_landing)
         self.explorer_page.run_action_requested.connect(self._run_action)
 
         self.progress_overlay = ProgressOverlay(self)
@@ -67,6 +112,115 @@ class MainWindow(QMainWindow):
             self.landing_page.set_path_text(last)
 
         self.landing_page.refresh()
+
+    def _remember_scan_path(self, path: Path) -> None:
+        expanded = expand_input_path(path)
+        self.settings["last_backup"] = str(expanded)
+        save_settings(self.settings)
+
+    def _return_to_landing(self) -> None:
+        if self._active_operation == "export":
+            return
+        self.stack.setCurrentWidget(self.landing_page)
+
+    def _open_file_direct(self, selected_files: object) -> None:
+        if isinstance(selected_files, Path):
+            raw_files = [selected_files]
+        elif isinstance(selected_files, list):
+            raw_files = [Path(path) if isinstance(path, str) else path for path in selected_files if isinstance(path, (Path, str))]
+        else:
+            raw_files = []
+        if not raw_files:
+            return
+
+        files: list[Path] = []
+        seen: set[str] = set()
+        for raw in raw_files:
+            expanded = expand_input_path(raw)
+            key = path_key(expanded)
+            if key in seen:
+                continue
+            seen.add(key)
+            files.append(expanded)
+
+        missing_or_invalid = [path for path in files if not path.exists() or not path.is_file()]
+        valid_files = [path for path in files if path.exists() and path.is_file()]
+        if not valid_files:
+            QMessageBox.warning(
+                self,
+                tr("MainWindow", "Invalid file"),
+                tr("MainWindow", "No valid files were selected."),
+            )
+            return
+
+        backup_groups: dict[str, tuple[Path, list[Path]]] = {}
+        resolve_errors: list[str] = []
+        for file_path in valid_files:
+            backup_dir = _resolve_backup_from_file(file_path)
+            if backup_dir is None:
+                resolve_errors.append(f"{file_path.name}: could not locate a Smart Switch backup nearby")
+                continue
+            key = path_key(backup_dir)
+            if key not in backup_groups:
+                backup_groups[key] = (backup_dir, [])
+            backup_groups[key][1].append(file_path)
+
+        if not backup_groups:
+            details = resolve_errors or [tr("MainWindow", "Could not locate a Smart Switch backup near the selected file.")]
+            QMessageBox.warning(
+                self,
+                tr("MainWindow", "Invalid backup"),
+                _render_issue_lines(details),
+            )
+            return
+
+        if len(backup_groups) > 1:
+            lines = [tr("MainWindow", "Please select files from a single backup at a time.")]
+            for backup_dir, backup_files in backup_groups.values():
+                lines.append(f"{backup_dir.name}: {len(backup_files)} file(s)")
+            QMessageBox.warning(
+                self,
+                tr("MainWindow", "Multiple backups selected"),
+                _render_issue_lines(lines),
+            )
+            return
+
+        backup_dir, backup_files = next(iter(backup_groups.values()))
+        if not self._open_backup(backup_dir):
+            return
+
+        available_ids = self.explorer_page.model.item_ids()
+        selected_item_ids: set[str] = set()
+        mapping_issues: list[str] = []
+
+        for file_path in backup_files:
+            item_ids, reason = map_direct_file_to_item_ids(file_path, backup_dir, available_ids)
+            if item_ids:
+                selected_item_ids.update(item_ids)
+                continue
+            mapping_issues.append(f"{file_path.name}: {reason}")
+
+        applied_item_ids = self.explorer_page.select_leaf_ids(selected_item_ids)
+        if not applied_item_ids:
+            details = mapping_issues or [tr("MainWindow", "No supported export items matched the selected files.")]
+            QMessageBox.warning(
+                self,
+                tr("MainWindow", "Unsupported file"),
+                _render_issue_lines(details),
+            )
+            return
+
+        skipped = [f"{path.name}: file does not exist or is not a regular file" for path in missing_or_invalid]
+        skipped.extend(resolve_errors)
+        skipped.extend(mapping_issues)
+        if skipped:
+            QMessageBox.information(
+                self,
+                tr("MainWindow", "Some files were skipped"),
+                _render_issue_lines(skipped),
+            )
+
+        self.explorer_page.open_export_prompt()
 
     def _on_listing_started(self) -> None:
         if self._active_operation == "export":
@@ -94,7 +248,11 @@ class MainWindow(QMainWindow):
             self.progress_overlay.finish()
             self._active_operation = None
 
-    def _open_backup(self, selected_path: Path) -> None:
+    def _open_backup(self, selected_path: Path) -> bool:
+        if self._active_operation == "listing":
+            self.progress_overlay.finish()
+            self._active_operation = None
+
         backup_dir = expand_input_path(selected_path)
         if not is_backup_dir(backup_dir):
             backups = find_backups(backup_dir)
@@ -104,23 +262,42 @@ class MainWindow(QMainWindow):
                     tr("MainWindow", "Invalid backup"),
                     tr("MainWindow", "No Smart Switch backup found in that folder."),
                 )
-                return
+                return False
             backup_dir = backups[0].path
 
         inventory = build_inventory(backup_dir)
         self.current_backup = backup_dir
         self.explorer_page.load_inventory(inventory)
+        self.explorer_page.set_size_pending()
         self.stack.setCurrentWidget(self.explorer_page)
-
-        self.settings["last_backup"] = str(backup_dir)
-        save_settings(self.settings)
-        self.landing_page.set_recent_backups([backup_dir])
-        self.landing_page.set_path_text(backup_dir)
 
         worker = FunctionWorker(enrich_inventory, backup_dir, inventory)
         worker.signals.result.connect(self.explorer_page.apply_patch)
         worker.signals.error.connect(self._show_error)
         self.thread_pool.start(worker)
+
+        size_worker = FunctionWorker(self._size_summary_for_backup, backup_dir, inventory)
+        size_worker.signals.result.connect(self._apply_size_summary)
+        size_worker.signals.error.connect(self._show_error)
+        self.thread_pool.start(size_worker, -2)
+        return True
+
+    def _size_summary_for_backup(
+        self, backup_dir: Path, inventory
+    ) -> tuple[Path, InventorySizeResult]:
+        return backup_dir, compute_inventory_sizes(backup_dir, inventory)
+
+    def _apply_size_summary(self, payload: object) -> None:
+        if not isinstance(payload, tuple) or len(payload) != 2:
+            return
+        backup_dir, summary = payload
+        if not isinstance(backup_dir, Path) or not isinstance(summary, InventorySizeResult):
+            return
+        if self.current_backup is None or not _same_path(self.current_backup, backup_dir):
+            return
+
+        self.explorer_page.apply_sizes(summary.item_sizes)
+        self.explorer_page.set_total_size(summary.total_bytes)
 
     def _run_action(self, options: dict, selected_nodes: list[dict], destination: Path) -> None:
         if self._active_operation is not None:

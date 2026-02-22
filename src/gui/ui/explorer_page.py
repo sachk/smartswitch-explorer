@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QModelIndex, QRect, Signal, Qt
-from PySide6.QtGui import QAction, QColor
+from PySide6.QtCore import QModelIndex, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
-    QApplication,
     QDialog,
     QFileDialog,
     QHBoxLayout,
@@ -17,108 +16,17 @@ from PySide6.QtWidgets import (
     QTreeView,
     QVBoxLayout,
     QWidget,
-    QStyledItemDelegate,
-    QStyle,
-    QStyleOptionViewItem,
 )
 
 from smartswitch_core.models import EnrichmentPatch, Inventory
+from smartswitch_core.sizes import format_bytes
 from gui.localization import tr
 from gui.ui.export_options_dialog import ExportOptionsDialog
 from gui.ui.tree_model import InventoryTreeModel, TreeFilterProxyModel
 
 
-class ModernTreeCheckDelegate(QStyledItemDelegate):
-    def _checkbox_rect(self, option: QStyleOptionViewItem) -> QRect:
-        size = max(16, min(option.rect.height() - 8, 20))
-        y = option.rect.center().y() - (size // 2)
-        return QRect(option.rect.x() + 8, y, size, size)
-
-    def paint(self, painter, option, index) -> None:  # type: ignore[override]
-        opt = QStyleOptionViewItem(option)
-        self.initStyleOption(opt, index)
-
-        style = opt.widget.style() if opt.widget else QApplication.style()
-        style.drawPrimitive(QStyle.PrimitiveElement.PE_PanelItemViewItem, opt, painter, opt.widget)
-
-        check_state = index.data(Qt.ItemDataRole.CheckStateRole)
-        has_check = check_state is not None
-        text_x = opt.rect.x() + 8
-        if has_check:
-            check_rect = self._checkbox_rect(opt)
-            base = opt.palette.color(opt.palette.ColorRole.Base)
-            text = opt.palette.color(opt.palette.ColorRole.Text)
-            is_dark = base.lightness() < 128
-
-            fill = QColor(text)
-            border = QColor(text)
-            if is_dark:
-                fill.setAlpha(235)
-                border.setAlpha(180)
-            else:
-                fill.setAlpha(215)
-                border.setAlpha(165)
-            if check_state == Qt.CheckState.Checked:
-                fill = opt.palette.color(opt.palette.ColorRole.Highlight)
-                border = opt.palette.color(opt.palette.ColorRole.HighlightedText)
-            elif check_state == Qt.CheckState.PartiallyChecked:
-                fill = QColor(opt.palette.color(opt.palette.ColorRole.Highlight))
-                fill.setAlpha(170)
-                border = QColor(opt.palette.color(opt.palette.ColorRole.HighlightedText))
-                border.setAlpha(190)
-
-            painter.save()
-            painter.setRenderHint(painter.RenderHint.Antialiasing, True)
-            painter.setPen(border)
-            painter.setBrush(fill)
-            painter.drawRoundedRect(check_rect, 4, 4)
-
-            if check_state == Qt.CheckState.Checked:
-                pen = opt.palette.color(opt.palette.ColorRole.HighlightedText)
-                painter.setPen(pen)
-                painter.drawLine(check_rect.left() + 4, check_rect.center().y(), check_rect.left() + 8, check_rect.bottom() - 4)
-                painter.drawLine(check_rect.left() + 8, check_rect.bottom() - 4, check_rect.right() - 3, check_rect.top() + 4)
-            elif check_state == Qt.CheckState.PartiallyChecked:
-                pen = opt.palette.color(opt.palette.ColorRole.Text)
-                painter.setPen(pen)
-                painter.drawLine(check_rect.left() + 4, check_rect.center().y(), check_rect.right() - 4, check_rect.center().y())
-            painter.restore()
-            text_x = check_rect.right() + 8
-
-        icon_x = text_x
-        if not opt.icon.isNull():
-            icon_size = max(16, min(opt.rect.height() - 8, 20))
-            icon_rect = QRect(icon_x, opt.rect.center().y() - (icon_size // 2), icon_size, icon_size)
-            opt.icon.paint(painter, icon_rect)
-            text_x = icon_rect.right() + 6
-
-        text_rect = QRect(text_x, opt.rect.y(), opt.rect.right() - text_x - 6, opt.rect.height())
-        if opt.state & QStyle.StateFlag.State_Selected:
-            painter.setPen(opt.palette.color(opt.palette.ColorRole.HighlightedText))
-        else:
-            painter.setPen(opt.palette.color(opt.palette.ColorRole.Text))
-        painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, opt.text)
-
-    def editorEvent(self, event, model, option, index) -> bool:  # type: ignore[override]
-        if not (index.flags() & Qt.ItemFlag.ItemIsUserCheckable):
-            return super().editorEvent(event, model, option, index)
-
-        if event.type() == QEvent.Type.MouseButtonRelease:
-            check_rect = self._checkbox_rect(option)
-            if check_rect.contains(event.pos()):
-                state = index.data(Qt.ItemDataRole.CheckStateRole)
-                next_state = Qt.CheckState.Unchecked if state == Qt.CheckState.Checked else Qt.CheckState.Checked
-                return bool(model.setData(index, next_state, Qt.ItemDataRole.CheckStateRole))
-
-        if event.type() == QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Select):
-            state = index.data(Qt.ItemDataRole.CheckStateRole)
-            next_state = Qt.CheckState.Unchecked if state == Qt.CheckState.Checked else Qt.CheckState.Checked
-            return bool(model.setData(index, next_state, Qt.ItemDataRole.CheckStateRole))
-
-        return super().editorEvent(event, model, option, index)
-
-
 class ExplorerPage(QWidget):
+    back_requested = Signal()
     run_action_requested = Signal(dict, list, Path)
 
     def __init__(self) -> None:
@@ -128,6 +36,14 @@ class ExplorerPage(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
+
+        header = QHBoxLayout()
+        self.back_button = QPushButton(tr("ExplorerPage", "Back to Backups"))
+        self.total_size_label = QLabel(tr("ExplorerPage", "Backup size: --"))
+        header.addWidget(self.back_button)
+        header.addStretch(1)
+        header.addWidget(self.total_size_label)
+        layout.addLayout(header)
 
         top = QHBoxLayout()
         self.search = QLineEdit()
@@ -161,7 +77,6 @@ class ExplorerPage(QWidget):
         self.tree.setUniformRowHeights(True)
         self.tree.setAlternatingRowColors(True)
         self.tree.setHeaderHidden(False)
-        self.tree.setItemDelegate(ModernTreeCheckDelegate(self.tree))
         layout.addWidget(self.tree, 1)
 
         actions = QHBoxLayout()
@@ -176,6 +91,7 @@ class ExplorerPage(QWidget):
         self.collapse_all_button.clicked.connect(self.tree.collapseAll)
 
         self.export_button.clicked.connect(self._emit_action)
+        self.back_button.clicked.connect(self.back_requested.emit)
 
         clear_action = QAction(tr("ExplorerPage", "Clear"), self)
         clear_action.triggered.connect(lambda: self.search.setText(""))
@@ -197,8 +113,52 @@ class ExplorerPage(QWidget):
     def apply_patch(self, patch: EnrichmentPatch) -> None:
         self.model.apply_patch(patch)
 
+    def apply_sizes(self, sizes: dict[str, int]) -> None:
+        self.model.apply_sizes(sizes)
+
+    def set_size_pending(self) -> None:
+        self.total_size_label.setText(tr("ExplorerPage", "Backup size: calculating..."))
+
+    def set_total_size(self, total_bytes: int) -> None:
+        template = tr("ExplorerPage", "Backup size: {size}")
+        self.total_size_label.setText(template.replace("{size}", format_bytes(total_bytes)))
+
     def set_busy(self, busy: bool) -> None:
         self.export_button.setDisabled(busy)
+
+    def select_leaf_ids(self, item_ids: set[str]) -> set[str]:
+        chosen = {item_id for item_id in item_ids if item_id in self.model.item_ids()}
+        if chosen:
+            self.model.set_checked_leaf_ids(chosen)
+        return chosen
+
+    def select_message_parts(self, preferred_parts: set[str] | None = None) -> bool:
+        part_to_id = {
+            "sms": "messages:sms",
+            "mms": "messages:mms",
+            "attachments": "messages:attachments",
+            "rcs": "messages:rcs",
+        }
+        available_ids = self.model.item_ids()
+        selectable = {item_id for item_id in part_to_id.values() if item_id in available_ids}
+        if not selectable:
+            return False
+
+        chosen: set[str] = set()
+        if preferred_parts:
+            for part in preferred_parts:
+                item_id = part_to_id.get(part)
+                if item_id and item_id in selectable:
+                    chosen.add(item_id)
+
+        if not chosen:
+            chosen = set(selectable)
+
+        applied = self.select_leaf_ids(chosen)
+        return bool(applied)
+
+    def open_export_prompt(self) -> None:
+        self._emit_action()
 
     def _apply_search(self, text: str) -> None:
         self.proxy.setFilterFixedString(text)

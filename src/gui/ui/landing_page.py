@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, Signal, QThreadPool
-from PySide6.QtGui import QIcon, QPainter, QPalette, QPixmap
+from PySide6.QtGui import QFont, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QPushButton,
     QSizePolicy,
     QSpacerItem,
     QToolButton,
@@ -230,12 +231,16 @@ class BackupListItemWidget(QWidget):
         content.setSpacing(2)
 
         title_label = QLabel(title)
-        title_label.setStyleSheet("font-size: 16px; font-weight: 700;")
+        title_font = QFont(title_label.font())
+        title_font.setBold(True)
+        point_size = title_font.pointSize()
+        if point_size > 0:
+            title_font.setPointSize(point_size + 1)
+        title_label.setFont(title_font)
         content.addWidget(title_label)
 
         path_label = QLabel(textwrap.fill(str(backup_dir), width=80))
         path_label.setWordWrap(True)
-        path_label.setStyleSheet("font-size: 12px;")
         content.addWidget(path_label)
         content.addItem(QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
 
@@ -261,6 +266,8 @@ class BackupListItemWidget(QWidget):
 
 class LandingPage(QWidget):
     backup_selected = Signal(Path)
+    path_committed = Signal(Path)
+    file_selected = Signal(object)
     listing_started = Signal()
     listing_progress = Signal(object)
     listing_status = Signal(str)
@@ -283,7 +290,12 @@ class LandingPage(QWidget):
 
         title = QLabel(tr("LandingPage", "SmartSwitch Explorer"))
         title.setObjectName("title")
-        title.setStyleSheet("font-size: 25px; font-weight: 700;")
+        title_font = QFont(title.font())
+        title_font.setBold(True)
+        title_point = title_font.pointSize()
+        if title_point > 0:
+            title_font.setPointSize(title_point + 3)
+        title.setFont(title_font)
         header_row.addWidget(title, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         divider = QFrame()
@@ -293,7 +305,6 @@ class LandingPage(QWidget):
 
         subtitle = QLabel(tr("LandingPage", "Open a backup folder or choose from automatically detected backups."))
         subtitle.setWordWrap(True)
-        subtitle.setStyleSheet("font-size: 16px;")
         subtitle.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         header_row.addWidget(subtitle, 1, alignment=Qt.AlignmentFlag.AlignVCenter)
         layout.addLayout(header_row)
@@ -306,7 +317,7 @@ class LandingPage(QWidget):
         picker_host = QWidget()
         picker_row = QHBoxLayout(picker_host)
         picker_row.setContentsMargins(10, 0, 10, 0)
-        picker_row.setSpacing(0)
+        picker_row.setSpacing(8)
 
         self.path_picker = QFrame()
         self.path_picker.setObjectName("pathPicker")
@@ -317,45 +328,33 @@ class LandingPage(QWidget):
 
         self.path_input = QLineEdit()
         self.path_input.setPlaceholderText(tr("LandingPage", "Select a backup folder"))
-        self.path_input.setMinimumHeight(42)
+        self.path_input.setMinimumHeight(34)
         self.path_input.setFrame(False)
-        self.path_input.setStyleSheet("font-size: 14px; padding-left: 12px; padding-right: 8px;")
+        self.path_input.setStyleSheet("padding-left: 10px; padding-right: 6px;")
         self.path_input.returnPressed.connect(self._open_path_from_input)
         path_picker_layout.addWidget(self.path_input, 1)
 
         self.open_folder_button = QToolButton()
-        self.open_folder_button.setFixedSize(QSize(42, 42))
-        self.open_folder_button.setIcon(
-            self._icon_for_button(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon), QSize(20, 20))
-        )
-        self.open_folder_button.setIconSize(QSize(20, 20))
+        self.open_folder_button.setFixedSize(QSize(34, 34))
+        self.open_folder_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
+        self.open_folder_button.setIconSize(QSize(18, 18))
         self.open_folder_button.setToolTip(tr("LandingPage", "Open folder chooser"))
-        self.open_folder_button.setAutoRaise(False)
-        self.open_folder_button.setStyleSheet(
-            "QToolButton {"
-            "  border: none;"
-            "  border-left: 1px solid palette(dark);"
-            "  border-top-right-radius: 10px;"
-            "  border-bottom-right-radius: 10px;"
-            "  background-color: palette(highlight);"
-            "  color: palette(highlighted-text);"
-            "}"
-            "QToolButton:hover {"
-            "  border-left: 1px solid palette(highlighted-text);"
-            "}"
-            "QToolButton:pressed {"
-            "  background-color: palette(shadow);"
-            "}"
-        )
+        self.open_folder_button.setAutoRaise(True)
         path_picker_layout.addWidget(self.open_folder_button)
         picker_row.addWidget(self.path_picker, 1)
+
+        self.open_file_button = QPushButton(tr("LandingPage", "Open File Directly"))
+        self.open_file_button.setToolTip(
+            tr("LandingPage", "Open Smart Switch files directly (.smem, .bk, .data, .penc, .apk, contact CSV/SPBM, CALLLOG.zip)")
+        )
+        picker_row.addWidget(self.open_file_button)
+
         layout.addWidget(picker_host)
 
         self.backup_group = QGroupBox(tr("LandingPage", "Detected Backups"))
-        self.backup_group.setStyleSheet(
-            "QGroupBox { font-size: 20px; font-weight: 600; }"
-            "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }"
-        )
+        group_font = QFont(self.backup_group.font())
+        group_font.setBold(True)
+        self.backup_group.setFont(group_font)
         group_layout = QVBoxLayout(self.backup_group)
         group_layout.setContentsMargins(10, 10, 10, 10)
         group_layout.setSpacing(0)
@@ -383,7 +382,12 @@ class LandingPage(QWidget):
         self.empty_label = QLabel(tr("LandingPage", "No backups detected"))
         self.empty_label.setWordWrap(True)
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_label.setStyleSheet("font-size: 24px; font-weight: 600; color: palette(text);")
+        empty_font = QFont(self.empty_label.font())
+        empty_font.setBold(True)
+        empty_point = empty_font.pointSize()
+        if empty_point > 0:
+            empty_font.setPointSize(empty_point + 1)
+        self.empty_label.setFont(empty_font)
         self.empty_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         empty_row.addWidget(self.empty_label, 70)
 
@@ -392,21 +396,17 @@ class LandingPage(QWidget):
         empty_layout.addStretch(1)
         host_layout.addWidget(self.empty_state, 0, 0)
 
-        self.refresh_button = QToolButton()
-        self.refresh_button.setIcon(
-            self._icon_for_button(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload), QSize(22, 22))
-        )
-        self.refresh_button.setIconSize(QSize(22, 22))
-        self.refresh_button.setFixedSize(QSize(42, 42))
-        self.refresh_button.setAutoRaise(False)
-        self.refresh_button.setStyleSheet(self._contrast_button_stylesheet(radius=6))
+        self.refresh_button = QPushButton(tr("LandingPage", "Refresh"))
+        self.refresh_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
+        self.refresh_button.setAutoDefault(False)
         self.refresh_button.setToolTip(tr("LandingPage", "Refresh detected backups"))
-        host_layout.addWidget(
-            self.refresh_button,
-            0,
-            0,
-            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight,
-        )
+
+        group_actions = QHBoxLayout()
+        group_actions.setContentsMargins(0, 0, 0, 6)
+        group_actions.addStretch(1)
+        group_actions.addWidget(self.refresh_button)
+
+        group_layout.addLayout(group_actions)
 
         group_layout.addWidget(self.list_host, 1)
         self.empty_state.hide()
@@ -414,25 +414,9 @@ class LandingPage(QWidget):
         layout.addWidget(self.backup_group, 1)
 
         self.open_folder_button.clicked.connect(self._open_folder_dialog)
+        self.open_file_button.clicked.connect(self._open_file_dialog)
         self.refresh_button.clicked.connect(self.refresh)
         self.backup_list.itemDoubleClicked.connect(self._open_list_item)
-
-    def _contrast_button_stylesheet(self, radius: int) -> str:
-        return (
-            "QToolButton {"
-            "  border: 1px solid palette(dark);"
-            f"  border-radius: {radius}px;"
-            "  background-color: rgba(128, 128, 128, 88);"
-            "  color: palette(highlighted-text);"
-            "}"
-            "QToolButton:hover {"
-            "  background-color: rgba(128, 128, 128, 128);"
-            "  border-color: palette(light);"
-            "}"
-            "QToolButton:pressed {"
-            "  background-color: rgba(128, 128, 128, 168);"
-            "}"
-        )
 
     def _path_picker_stylesheet(self) -> str:
         return (
@@ -442,22 +426,6 @@ class LandingPage(QWidget):
             "  background-color: palette(base);"
             "}"
         )
-
-    def _icon_for_button(self, base_icon: QIcon, size: QSize) -> QIcon:
-        base = base_icon.pixmap(size)
-        if base.isNull():
-            return base_icon
-
-        tinted = QPixmap(base.size())
-        tinted.fill(Qt.GlobalColor.transparent)
-
-        painter = QPainter(tinted)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        painter.drawPixmap(0, 0, base)
-        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
-        painter.fillRect(tinted.rect(), self.palette().color(QPalette.ColorRole.HighlightedText))
-        painter.end()
-        return QIcon(tinted)
 
     def set_recent_backups(self, paths: list[Path]) -> None:
         self._recent_backup_hints = [expand_input_path(path) for path in paths]
@@ -526,7 +494,23 @@ class LandingPage(QWidget):
         selected = expand_input_path(path)
         self.path_input.setText(str(selected))
         self._add_recent_hint(selected)
+        self.path_committed.emit(selected)
         self.refresh()
+
+    def _open_file_dialog(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            tr("LandingPage", "Select Smart Switch Files"),
+            "",
+            tr(
+                "LandingPage",
+                "Smart Switch Files (*.smem *sms_restore.bk *mms_restore.bk *PART_* *RCSMESSAGE* *RcsMessage* *.data *.penc *.apk *.csv *.spbm CALLLOG.zip);;All Files (*)",
+            ),
+        )
+        if not paths:
+            return
+        selected = [expand_input_path(path) for path in paths]
+        self.file_selected.emit(selected)
 
     def _open_path_from_input(self) -> None:
         raw_path = self.path_input.text().strip()
@@ -535,6 +519,7 @@ class LandingPage(QWidget):
         selected = expand_input_path(raw_path)
         self.path_input.setText(str(selected))
         self._add_recent_hint(selected)
+        self.path_committed.emit(selected)
         self.refresh()
 
     def _open_list_item(self, item: QListWidgetItem) -> None:
