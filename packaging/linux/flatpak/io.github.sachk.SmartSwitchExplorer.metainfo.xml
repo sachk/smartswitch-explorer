@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.sachk.SmartSwitchExplorer</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <name>SmartSwitch Explorer</name>
+  <summary>Explore and export Samsung Smart Switch backups</summary>
+  <description>
+    <p>
+      SmartSwitch Explorer is a desktop application for browsing Samsung Smart Switch backups
+      and exporting only the categories you choose.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.sachk.SmartSwitchExplorer.desktop</launchable>
+  <developer id="io.github.sachk">
+    <name>sachk</name>
+  </developer>
+  <url type="homepage">https://github.com/sachk/smartswitch-explorer</url>
+  <url type="bugtracker">https://github.com/sachk/smartswitch-explorer/issues</url>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/sachk/smartswitch-explorer/main/docs/screenshots/03-explorer.png</image>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-02-22"/>
+  </releases>
+</component>

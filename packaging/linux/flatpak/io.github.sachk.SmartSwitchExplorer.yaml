@@ -1,0 +1,38 @@
+app-id: io.github.sachk.SmartSwitchExplorer
+runtime: org.kde.Platform
+runtime-version: "6.8"
+sdk: org.kde.Sdk
+command: smartswitch-explorer
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --filesystem=home
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/man
+modules:
+  - name: smartswitch-explorer
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 smartswitch-explorer /app/bin/smartswitch-explorer
+      - mkdir -p /app/lib/smartswitch-explorer
+      - cp -a smartswitch-explorer-dist/. /app/lib/smartswitch-explorer/
+      - install -Dm644 io.github.sachk.SmartSwitchExplorer.desktop /app/share/applications/io.github.sachk.SmartSwitchExplorer.desktop
+      - install -Dm644 app_icon.png /app/share/icons/hicolor/256x256/apps/io.github.sachk.SmartSwitchExplorer.png
+      - install -Dm644 io.github.sachk.SmartSwitchExplorer.metainfo.xml /app/share/metainfo/io.github.sachk.SmartSwitchExplorer.metainfo.xml
+    sources:
+      - type: dir
+        path: dist/smartswitch-explorer
+        dest: smartswitch-explorer-dist
+      - type: file
+        path: packaging/linux/flatpak/smartswitch-explorer
+      - type: file
+        path: packaging/linux/flatpak/io.github.sachk.SmartSwitchExplorer.desktop
+      - type: file
+        path: packaging/linux/flatpak/io.github.sachk.SmartSwitchExplorer.metainfo.xml
+      - type: file
+        path: src/gui/assets/app_icon.png
+        dest-filename: app_icon.png

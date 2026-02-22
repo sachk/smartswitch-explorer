@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=SmartSwitch Explorer
+Comment=Explore and export Samsung Smart Switch backups
+Exec=smartswitch-explorer
+Icon=smartswitch-explorer
+Terminal=false
+Categories=Utility;
+StartupNotify=true

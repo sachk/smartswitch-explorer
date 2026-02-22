@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+APP_LIB="/app/lib/smartswitch-explorer"
+export QT_PLUGIN_PATH="$APP_LIB/PySide6/Qt/plugins"
+export QT_QPA_PLATFORM_PLUGIN_PATH="$APP_LIB/PySide6/Qt/plugins/platforms"
+export LD_LIBRARY_PATH="$APP_LIB:${LD_LIBRARY_PATH:-}"
+
+exec "$APP_LIB/smartswitch-explorer" "$@"
