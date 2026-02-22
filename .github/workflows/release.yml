@@ -11,6 +11,7 @@ permissions:
 
 env:
   FLATPAK_APP_ID: io.github.sachk.SmartSwitchExplorer
+  UPX_VERSION: "5.1.0"
 
 jobs:
   validate-version:
@@ -68,7 +69,7 @@ jobs:
         if: matrix.arch == 'x64'
         shell: pwsh
         run: |
-          $upxVersion = "4.2.4"
+          $upxVersion = "${{ env.UPX_VERSION }}"
           $archive = "$env:RUNNER_TEMP\upx.zip"
           $extractRoot = "$env:RUNNER_TEMP\upx"
           Invoke-WebRequest -Uri "https://github.com/upx/upx/releases/download/v$upxVersion/upx-$upxVersion-win64.zip" -OutFile $archive
@@ -216,19 +217,22 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          sudo apt-get update
-          if ! sudo apt-get install -y upx-ucl; then
-            sudo apt-get install -y upx
+          set -euo pipefail
+          case "${{ matrix.arch }}" in
+            x86_64) upx_arch="amd64" ;;
+            aarch64) upx_arch="arm64" ;;
+            *) echo "Unsupported UPX architecture: ${{ matrix.arch }}" >&2; exit 1 ;;
+          esac
+          archive="upx-${{ env.UPX_VERSION }}-${upx_arch}_linux.tar.xz"
+          upx_root="$RUNNER_TEMP/upx-${{ env.UPX_VERSION }}-${upx_arch}_linux"
+          curl -fsSL "https://github.com/upx/upx/releases/download/v${{ env.UPX_VERSION }}/${archive}" -o "$RUNNER_TEMP/$archive"
+          tar -xJf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP"
+          if [ ! -x "$upx_root/upx" ]; then
+            echo "UPX binary not found in extracted archive: $upx_root/upx" >&2
+            exit 1
           fi
-          mkdir -p "$RUNNER_TEMP/upx-bin"
-          if command -v upx >/dev/null 2>&1; then
-            cp "$(command -v upx)" "$RUNNER_TEMP/upx-bin/upx"
-          else
-            cp "$(command -v upx-ucl)" "$RUNNER_TEMP/upx-bin/upx"
-          fi
-          chmod +x "$RUNNER_TEMP/upx-bin/upx"
-          echo "$RUNNER_TEMP/upx-bin" >> "$GITHUB_PATH"
-          echo "UPX_DIR=$RUNNER_TEMP/upx-bin" >> "$GITHUB_ENV"
+          echo "$upx_root" >> "$GITHUB_PATH"
+          echo "UPX_DIR=$upx_root" >> "$GITHUB_ENV"
 
       - name: Sync dependencies
         run: uv sync
@@ -315,19 +319,22 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          sudo apt-get update
-          if ! sudo apt-get install -y upx-ucl; then
-            sudo apt-get install -y upx
+          set -euo pipefail
+          case "${{ matrix.arch }}" in
+            x86_64) upx_arch="amd64" ;;
+            aarch64) upx_arch="arm64" ;;
+            *) echo "Unsupported UPX architecture: ${{ matrix.arch }}" >&2; exit 1 ;;
+          esac
+          archive="upx-${{ env.UPX_VERSION }}-${upx_arch}_linux.tar.xz"
+          upx_root="$RUNNER_TEMP/upx-${{ env.UPX_VERSION }}-${upx_arch}_linux"
+          curl -fsSL "https://github.com/upx/upx/releases/download/v${{ env.UPX_VERSION }}/${archive}" -o "$RUNNER_TEMP/$archive"
+          tar -xJf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP"
+          if [ ! -x "$upx_root/upx" ]; then
+            echo "UPX binary not found in extracted archive: $upx_root/upx" >&2
+            exit 1
           fi
-          mkdir -p "$RUNNER_TEMP/upx-bin"
-          if command -v upx >/dev/null 2>&1; then
-            cp "$(command -v upx)" "$RUNNER_TEMP/upx-bin/upx"
-          else
-            cp "$(command -v upx-ucl)" "$RUNNER_TEMP/upx-bin/upx"
-          fi
-          chmod +x "$RUNNER_TEMP/upx-bin/upx"
-          echo "$RUNNER_TEMP/upx-bin" >> "$GITHUB_PATH"
-          echo "UPX_DIR=$RUNNER_TEMP/upx-bin" >> "$GITHUB_ENV"
+          echo "$upx_root" >> "$GITHUB_PATH"
+          echo "UPX_DIR=$upx_root" >> "$GITHUB_ENV"
 
       - name: Sync dependencies
         run: uv sync
