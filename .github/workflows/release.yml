@@ -214,6 +214,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            file \
             libegl1 \
             libgl1 \
             libglib2.0-0 \

@@ -43,10 +43,10 @@ fi
 
 case "$arch" in
   x86_64)
-    tool_url="https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+    tool_url="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
     ;;
   aarch64)
-    tool_url="https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-aarch64.AppImage"
+    tool_url="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-aarch64.AppImage"
     ;;
   *)
     echo "Unsupported AppImage arch: $arch" >&2
@@ -62,6 +62,11 @@ appimage_zstd_level="${APPIMAGE_ZSTD_LEVEL:-18}"
 tool_path="/tmp/appimagetool-${arch}.AppImage"
 curl -fsSL "$tool_url" -o "$tool_path"
 chmod +x "$tool_path"
+
+if ! command -v file >/dev/null 2>&1; then
+  echo "Missing required dependency: 'file' command (install package: file)" >&2
+  exit 1
+fi
 
 appimagetool_args=(--appimage-extract-and-run --comp "$appimage_comp")
 compression_label="$appimage_comp"
