@@ -25,14 +25,14 @@ modules:
       - install -Dm644 io.github.sachk.SmartSwitchExplorer.metainfo.xml /app/share/metainfo/io.github.sachk.SmartSwitchExplorer.metainfo.xml
     sources:
       - type: dir
-        path: dist/smartswitch-explorer
+        path: ../../../dist/smartswitch-explorer
         dest: smartswitch-explorer-dist
       - type: file
-        path: packaging/linux/flatpak/smartswitch-explorer
+        path: smartswitch-explorer
       - type: file
-        path: packaging/linux/flatpak/io.github.sachk.SmartSwitchExplorer.desktop
+        path: io.github.sachk.SmartSwitchExplorer.desktop
       - type: file
-        path: packaging/linux/flatpak/io.github.sachk.SmartSwitchExplorer.metainfo.xml
+        path: io.github.sachk.SmartSwitchExplorer.metainfo.xml
       - type: file
-        path: src/gui/assets/app_icon.png
+        path: ../../../src/gui/assets/app_icon.png
         dest-filename: app_icon.png

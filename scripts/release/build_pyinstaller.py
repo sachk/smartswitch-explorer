@@ -16,6 +16,10 @@ PROFILES: dict[str, dict[str, str | list[str]]] = {
         "name": "SmartSwitch Explorer",
         "extra": [],
     },
+    "macos-universal": {
+        "name": "SmartSwitch Explorer",
+        "extra": ["--target-architecture", "universal2"],
+    },
     "linux-dir": {
         "name": "smartswitch-explorer",
         "extra": [],

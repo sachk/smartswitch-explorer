@@ -26,8 +26,11 @@ mkdir -p "$appdir/usr/share/icons/hicolor/256x256/apps"
 cp -a "$dist_dir"/. "$appdir/usr/lib/smartswitch-explorer/"
 install -Dm755 packaging/linux/appimage/smartswitch-explorer-wrapper.sh "$appdir/usr/bin/smartswitch-explorer"
 install -Dm755 packaging/linux/appimage/AppRun "$appdir/AppRun"
+install -Dm644 packaging/linux/smartswitch-explorer.desktop "$appdir/smartswitch-explorer.desktop"
+install -Dm644 src/gui/assets/app_icon.png "$appdir/smartswitch-explorer.png"
 install -Dm644 packaging/linux/smartswitch-explorer.desktop "$appdir/usr/share/applications/smartswitch-explorer.desktop"
 install -Dm644 src/gui/assets/app_icon.png "$appdir/usr/share/icons/hicolor/256x256/apps/smartswitch-explorer.png"
+ln -sf "smartswitch-explorer.png" "$appdir/.DirIcon"
 
 case "$arch" in
   x86_64)
