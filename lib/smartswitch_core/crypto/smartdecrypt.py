@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 
 from Crypto.Cipher import AES
@@ -52,6 +53,27 @@ def _decrypt_with_suffix_trim(raw: bytes, *, dummy_hex: str, trim_tail_bytes: in
     if not ciphertext:
         raise ValueError("Encrypted payload has no aligned ciphertext")
     return AES.new(derive_dummy_key(dummy_hex), AES.MODE_CBC, iv).decrypt(ciphertext)
+
+def _decrypt_with_key(raw: bytes, key: bytes, *, offset: int = 16) -> bytes:
+    if len(raw) < offset + 16:
+        raise ValueError("Encrypted payload too small")
+    ciphertext = raw[offset:]
+    ciphertext = ciphertext[: len(ciphertext) - (len(ciphertext) % AES.block_size)]
+    if not ciphertext:
+        raise ValueError("Encrypted payload has no aligned ciphertext")
+    return AES.new(key, AES.MODE_CBC, raw[:16]).decrypt(ciphertext)
+
+
+def _password_master_keys(password: str, dummy_hex: str) -> list[bytes]:
+    salts = [dummy_hex.encode("utf-8")]
+    try:
+        salts.insert(0, bytes.fromhex(dummy_hex))
+    except ValueError:
+        pass
+    return [
+        hashlib.pbkdf2_hmac("sha1", password.encode("utf-8"), salt, 1000, dklen=32)
+        for salt in salts
+    ]
 
 
 def extract_json_region(payload: bytes) -> bytes:
@@ -150,6 +172,7 @@ def decode_iv_prefix_payload(
     raw: bytes,
     *,
     dummy_hex: str = DEFAULT_DUMMY_HEX,
+    password: str | None = None,
     name_hint: str = "",
     xml_root_tag: str | None = None,
 ) -> DecodedPayload:
@@ -170,6 +193,15 @@ def decode_iv_prefix_payload(
             variants.append(_decrypt_with_suffix_trim(raw, dummy_hex=dummy_hex, trim_tail_bytes=trim))
         except ValueError as exc:
             errors.append(str(exc))
+
+    if password:
+        variants.append(_decrypt_with_key(raw, derive_dummy_key(password)))
+        for master_key in _password_master_keys(password, dummy_hex):
+            variants.append(_decrypt_with_key(raw, hashlib.sha256(master_key).digest()[:16]))
+            if len(raw) >= 48:
+                salt = raw[16:32]
+                key = hashlib.pbkdf2_hmac("sha1", master_key, salt, 1000, dklen=32)
+                variants.append(_decrypt_with_key(raw, key, offset=32))
 
     if not variants:
         raise ValueError("; ".join(errors) if errors else "Unable to decrypt payload")

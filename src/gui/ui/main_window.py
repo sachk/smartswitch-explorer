@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QSize, QThreadPool, QUrl
+from PySide6.QtCore import QSize, Qt, QThreadPool, QUrl
 from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QStackedWidget
 
@@ -27,6 +27,7 @@ from smartswitch_core.other_export import export_other_entry, export_settings_en
 from smartswitch_core.scan import build_inventory, expand_input_path, find_backups, is_backup_dir
 from smartswitch_core.sizes import InventorySizeResult, compute_inventory_sizes
 from gui.config import load_settings, save_settings
+from gui.diagnostics import build_anonymized_report, build_issue_url
 from gui.localization import tr
 from gui.ui.explorer_page import ExplorerPage
 from gui.ui.landing_page import LandingPage
@@ -341,6 +342,7 @@ class MainWindow(QMainWindow):
         app_data_mode = str(options.get("app_data_mode", "extract"))
         app_data_include_decrypt = app_data_mode in {"decrypt", "both"}
         app_data_include_extract = app_data_mode in {"extract", "both"}
+        app_data_password = options.get("app_data_password")
 
         message_parts = {
             node["id"].split(":", 1)[1]
@@ -461,6 +463,9 @@ class MainWindow(QMainWindow):
                 export_root,
                 message_parts,
                 message_format=messages_format,
+                backup_password=(
+                    str(app_data_password) if app_data_password is not None else None
+                ),
                 include_decrypt=messages_format in {"json", "csv"},
                 include_extract=True,
             )
@@ -485,6 +490,9 @@ class MainWindow(QMainWindow):
                     include_decrypt=app_data_include_decrypt,
                     include_extract=app_data_include_extract,
                     manifest_name="manifest_data.json",
+                    app_data_password=(
+                        str(app_data_password) if app_data_password is not None else None
+                    ),
                 )
                 warnings.extend(result.warnings)
                 errors.extend(result.errors)
@@ -580,7 +588,14 @@ class MainWindow(QMainWindow):
             if set_status is not None:
                 set_status("Exporting call log")
             emit_progress("calllog", "Call log", f"Format: {calllog_format}")
-            result = export_call_log(backup_dir, export_root, output_format=calllog_format)
+            result = export_call_log(
+                backup_dir,
+                export_root,
+                output_format=calllog_format,
+                backup_password=(
+                    str(app_data_password) if app_data_password is not None else None
+                ),
+            )
             warnings.extend(result.warnings)
             errors.extend(result.errors)
             outputs.extend(str(path) for path in result.outputs)
@@ -593,7 +608,14 @@ class MainWindow(QMainWindow):
             if set_status is not None:
                 set_status(f"Exporting other entry: {entry_name}")
             emit_progress("other_entries", "Other backup data", entry_name)
-            result = export_other_entry(backup_dir, entry_name, export_root)
+            result = export_other_entry(
+                backup_dir,
+                entry_name,
+                export_root,
+                backup_password=(
+                    str(app_data_password) if app_data_password is not None else None
+                ),
+            )
             warnings.extend(result.warnings)
             errors.extend(result.errors)
             outputs.extend(str(path) for path in result.outputs)
@@ -606,7 +628,14 @@ class MainWindow(QMainWindow):
             if set_status is not None:
                 set_status(f"Exporting storage entry: {entry_name}")
             emit_progress("storage_entries", "Storage", entry_name)
-            result = export_storage_entry(backup_dir, entry_name, export_root)
+            result = export_storage_entry(
+                backup_dir,
+                entry_name,
+                export_root,
+                backup_password=(
+                    str(app_data_password) if app_data_password is not None else None
+                ),
+            )
             warnings.extend(result.warnings)
             errors.extend(result.errors)
             outputs.extend(str(path) for path in result.outputs)
@@ -619,7 +648,14 @@ class MainWindow(QMainWindow):
             if set_status is not None:
                 set_status(f"Exporting settings entry: {entry_name}")
             emit_progress("settings_entries", "Settings", entry_name)
-            result = export_settings_entry(backup_dir, entry_name, export_root)
+            result = export_settings_entry(
+                backup_dir,
+                entry_name,
+                export_root,
+                backup_password=(
+                    str(app_data_password) if app_data_password is not None else None
+                ),
+            )
             warnings.extend(result.warnings)
             errors.extend(result.errors)
             outputs.extend(str(path) for path in result.outputs)
@@ -665,20 +701,46 @@ class MainWindow(QMainWindow):
         errors = payload.get("errors", [])
         export_root = payload.get("export_root", "")
 
+        detail_sections: list[str] = []
+        if errors:
+            detail_sections.append(
+                f"{tr('MainWindow', 'Errors')}:\n" + "\n".join(f"- {error}" for error in errors)
+            )
+        if warnings:
+            detail_sections.append(
+                f"{tr('MainWindow', 'Warnings')}:\n"
+                + "\n".join(f"- {warning}" for warning in warnings)
+            )
+        issue_details = "\n\n".join(detail_sections)
+        issue_url = build_issue_url(build_anonymized_report(list(errors), list(warnings))) if errors else ""
+
         if cancelled:
             summary = [f"{tr('MainWindow', 'Export cancelled')}: {export_root}"]
             if errors:
                 summary.append(f"{tr('MainWindow', 'Errors')}: {len(errors)}")
             if warnings:
                 summary.append(f"{tr('MainWindow', 'Warnings')}: {len(warnings)}")
-            self._show_export_result(tr("MainWindow", "Cancelled"), "\n".join(summary), export_root, warning=False)
+            self._show_export_result(
+                tr("MainWindow", "Cancelled"),
+                "\n".join(summary),
+                export_root,
+                warning=False,
+                details=issue_details,
+                issue_url=issue_url,
+            )
             return
 
         if ok:
             summary = [f"{tr('MainWindow', 'Export complete')}: {export_root}"]
             if warnings:
                 summary.append(f"{tr('MainWindow', 'Warnings')}: {len(warnings)}")
-            self._show_export_result(tr("MainWindow", "Done"), "\n".join(summary), export_root, warning=False)
+            self._show_export_result(
+                tr("MainWindow", "Done"),
+                "\n".join(summary),
+                export_root,
+                warning=False,
+                details=issue_details,
+            )
         else:
             summary = [
                 f"{tr('MainWindow', 'Export finished with errors')}: {export_root}",
@@ -686,11 +748,18 @@ class MainWindow(QMainWindow):
             ]
             if warnings:
                 summary.append(f"{tr('MainWindow', 'Warnings')}: {len(warnings)}")
+            if errors:
+                summary.append("")
+                summary.extend(str(error) for error in errors[:3])
+                if len(errors) > 3:
+                    summary.append(f"... and {len(errors) - 3} more; select Show Details.")
             self._show_export_result(
                 tr("MainWindow", "Completed with errors"),
                 "\n".join(summary),
                 export_root,
                 warning=True,
+                details=issue_details,
+                issue_url=issue_url,
             )
 
     def _handle_action_error(self, message: str) -> None:
@@ -703,14 +772,36 @@ class MainWindow(QMainWindow):
     def _show_error(self, message: str) -> None:
         QMessageBox.critical(self, tr("MainWindow", "Error"), message)
 
-    def _show_export_result(self, title: str, text: str, export_root: str, *, warning: bool) -> None:
+    def _show_export_result(
+        self,
+        title: str,
+        text: str,
+        export_root: str,
+        *,
+        warning: bool,
+        details: str = "",
+        issue_url: str = "",
+    ) -> None:
         box = QMessageBox(self)
         box.setWindowTitle(title)
         box.setText(text)
         box.setIcon(QMessageBox.Icon.Warning if warning else QMessageBox.Icon.Information)
         open_button = box.addButton(tr("MainWindow", "Open Folder"), QMessageBox.ButtonRole.ActionRole)
+        report_button = (
+            box.addButton(tr("MainWindow", "Report Issue"), QMessageBox.ButtonRole.ActionRole)
+            if issue_url
+            else None
+        )
         close_button = box.addButton(QMessageBox.StandardButton.Close)
         box.setDefaultButton(close_button)
+        box.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        if details:
+            box.setDetailedText(details)
         box.exec()
         if box.clickedButton() is open_button and export_root:
             QDesktopServices.openUrl(QUrl.fromLocalFile(export_root))
+        elif report_button is not None and box.clickedButton() is report_button:
+            QDesktopServices.openUrl(QUrl(issue_url))

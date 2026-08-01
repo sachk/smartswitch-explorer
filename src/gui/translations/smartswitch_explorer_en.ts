@@ -18,6 +18,7 @@
     <message><source>Completed with errors</source><translation>Completed with errors</translation></message>
     <message><source>Error</source><translation>Error</translation></message>
     <message><source>Open Folder</source><translation>Open Folder</translation></message>
+    <message><source>Report Issue</source><translation>Report Issue</translation></message>
   </context>
   <context>
     <name>ExplorerPage</name>
@@ -44,6 +45,8 @@
     <message><source>Decrypted Tar</source><translation>Decrypted Tar</translation></message>
     <message><source>Both</source><translation>Both</translation></message>
     <message><source>Application Data</source><translation>Application Data</translation></message>
+    <message><source>Backup Password</source><translation>Backup Password</translation></message>
+    <message><source>Optional; only if a backup password was configured</source><translation>Optional; only if a backup password was configured</translation></message>
     <message><source>Native Files</source><translation>Native Files</translation></message>
     <message><source>Contacts</source><translation>Contacts</translation></message>
     <message><source>Native (encrypted zip)</source><translation>Native (encrypted zip)</translation></message>

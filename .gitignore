@@ -6,3 +6,6 @@ __pycache__/
 *.swp
 
 smartswitch_explorer.egg-info/
+
+/sources/
+/resources/

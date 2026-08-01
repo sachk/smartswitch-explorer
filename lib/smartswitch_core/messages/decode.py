@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import csv
+from collections.abc import Callable
+import io
 import json
 import shutil
+import sqlite3
+import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
 
@@ -31,7 +35,7 @@ class MessageSource:
         except (OSError, zipfile.BadZipFile):
             return []
 
-    def read_first(self, predicate: callable) -> tuple[str, bytes] | None:
+    def read_first(self, predicate: Callable[[str], bool]) -> tuple[str, bytes] | None:
         for path in self._local_files():
             if predicate(path.name):
                 try:
@@ -52,7 +56,7 @@ class MessageSource:
             return None
         return None
 
-    def copy_matching(self, predicate: callable, destination: Path) -> int:
+    def copy_matching(self, predicate: Callable[[str], bool], destination: Path) -> int:
         destination.mkdir(parents=True, exist_ok=True)
         copied = 0
         used_names: set[str] = set()
@@ -100,8 +104,17 @@ class MessageSource:
         return copied
 
 
-def _decrypt_bk_json(raw: bytes, dummy_hex: str) -> list[dict] | dict:
-    decoded = decode_iv_prefix_payload(raw, dummy_hex=dummy_hex, name_hint="sms_restore.bk")
+def _decrypt_bk_json(
+    raw: bytes,
+    dummy_hex: str,
+    backup_password: str | None,
+) -> list[dict] | dict:
+    decoded = decode_iv_prefix_payload(
+        raw,
+        dummy_hex=dummy_hex,
+        password=backup_password,
+        name_hint="sms_restore.bk",
+    )
     if decoded.kind != "json":
         raise ValueError("Decrypted payload is not JSON")
     return json.loads(decoded.payload.decode("utf-8"))
@@ -130,6 +143,90 @@ def _write_rows_csv(payload: list[dict] | dict, target: Path) -> None:
             writer.writerow({col: row.get(col, "") for col in columns})
 
 
+def _sqlite_value(value: object) -> object:
+    if isinstance(value, bytes):
+        return value.hex()
+    return value
+
+
+def _decode_edb_tables(
+    raw: bytes,
+    dummy_hex: str,
+    backup_password: str | None,
+) -> dict[str, list[dict[str, object]]]:
+    decoded = decode_iv_prefix_payload(
+        raw,
+        dummy_hex=dummy_hex,
+        password=backup_password,
+        name_hint="RcsMessage.edb",
+    )
+    if decoded.kind != "zip":
+        raise ValueError("Decrypted EDB payload is not a ZIP archive")
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(decoded.payload)) as archive:
+            db_info = next(
+                (
+                    info
+                    for info in archive.infolist()
+                    if not info.is_dir() and PurePosixPath(info.filename).name == "mmssms.db"
+                ),
+                None,
+            )
+            if db_info is None:
+                raise ValueError("Decrypted EDB archive does not contain mmssms.db")
+            database = archive.read(db_info)
+    except (OSError, KeyError, zipfile.BadZipFile) as exc:
+        raise ValueError(f"Invalid decrypted EDB archive: {exc}") from exc
+
+    tables: dict[str, list[dict[str, object]]] = {}
+    with tempfile.TemporaryDirectory(prefix="smartswitch-messages-") as temp_dir:
+        db_path = Path(temp_dir) / "mmssms.db"
+        db_path.write_bytes(database)
+        try:
+            connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            connection.row_factory = sqlite3.Row
+            try:
+                existing = {
+                    str(row[0])
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    )
+                }
+                for table_name in ("im", "ft"):
+                    if table_name not in existing:
+                        continue
+                    rows = connection.execute(f'SELECT * FROM "{table_name}"')
+                    tables[table_name] = [
+                        {key: _sqlite_value(row[key]) for key in row.keys()} for row in rows
+                    ]
+            finally:
+                connection.close()
+        except sqlite3.DatabaseError as exc:
+            raise ValueError(f"Invalid mmssms.db database: {exc}") from exc
+
+    if not tables:
+        raise ValueError("mmssms.db does not contain RCS message tables")
+    return tables
+
+
+def _write_edb_tables(
+    tables: dict[str, list[dict[str, object]]],
+    destination: Path,
+    output_format: str,
+) -> list[Path]:
+    if output_format == "json":
+        target = destination / "rcs.json"
+        target.write_text(json.dumps(tables, ensure_ascii=False, indent=2), encoding="utf-8")
+        return [target]
+
+    outputs: list[Path] = []
+    for table_name, rows in tables.items():
+        target = destination / f"rcs_{table_name}.csv"
+        _write_rows_csv(rows, target)
+        outputs.append(target)
+    return outputs
+
 def decode_and_export_messages(
     backup_dir: Path,
     out_dir: Path,
@@ -137,6 +234,7 @@ def decode_and_export_messages(
     *,
     message_format: str = "json",
     dummy_hex: str = DEFAULT_DUMMY_HEX,
+    backup_password: str | None = None,
     include_decrypt: bool = True,
     include_extract: bool = True,
 ) -> ExportResult:
@@ -181,7 +279,7 @@ def decode_and_export_messages(
         else:
             _, raw = sms_entry
             try:
-                sms_json = _decrypt_bk_json(raw, dummy_hex)
+                sms_json = _decrypt_bk_json(raw, dummy_hex, backup_password)
                 sms_path = message_out / ("sms.csv" if normalized_format == "csv" else "sms.json")
                 if normalized_format == "csv":
                     _write_rows_csv(sms_json, sms_path)
@@ -211,7 +309,7 @@ def decode_and_export_messages(
         else:
             _, raw = mms_entry
             try:
-                mms_json = _decrypt_bk_json(raw, dummy_hex)
+                mms_json = _decrypt_bk_json(raw, dummy_hex, backup_password)
                 mms_path = message_out / ("mms.csv" if normalized_format == "csv" else "mms.json")
                 if normalized_format == "csv":
                     _write_rows_csv(mms_json, mms_path)
@@ -229,15 +327,36 @@ def decode_and_export_messages(
         if copied:
             outputs.append(media_dir)
 
-    if include_extract and "rcs" in selected_parts:
-        rcs_dir = message_out / "rcs"
-        copied = source.copy_matching(
-            lambda name: ("RCSMESSAGE" in name) or ("RcsMessage" in name),
-            rcs_dir,
-        )
-        manifest["copied"]["rcs"] = copied
-        if copied:
-            outputs.append(rcs_dir)
+    if "rcs" in selected_parts:
+        if normalized_format == "native":
+            rcs_dir = message_out / "native"
+            copied = source.copy_matching(
+                lambda name: ("RCSMESSAGE" in name) or ("RcsMessage" in name),
+                rcs_dir,
+            )
+            manifest["copied"]["rcs_native"] = copied
+            if copied:
+                outputs.append(rcs_dir)
+        elif include_decrypt:
+            rcs_entry = source.read_first(
+                lambda name: (
+                    (("RCSMESSAGE" in name) or ("RcsMessage" in name))
+                    and name.lower().endswith(".edb")
+                )
+            )
+            if rcs_entry is None:
+                warnings.append("RcsMessage.edb not found")
+            else:
+                _, raw = rcs_entry
+                try:
+                    tables = _decode_edb_tables(raw, dummy_hex, backup_password)
+                    converted = _write_edb_tables(tables, message_out, normalized_format)
+                    outputs.extend(converted)
+                    manifest["decoded"]["rcs"] = {
+                        table_name: len(rows) for table_name, rows in tables.items()
+                    }
+                except ValueError as exc:
+                    warnings.append(f"RCS message decode failed: {exc}")
 
     manifest_path = message_out / "manifest.json"
     write_manifest(manifest_path, manifest)

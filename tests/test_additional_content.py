@@ -11,7 +11,7 @@ from smartswitch_core.additional_export import (
     export_media_directory,
     export_watch_backup,
 )
-from smartswitch_core.crypto.common import derive_dummy_key
+from smartswitch_core.crypto.common import DEFAULT_PENC_IV, derive_dummy_key
 from smartswitch_core.scan import build_inventory
 
 
@@ -25,6 +25,11 @@ def _encrypt_ivprefix(payload: bytes, *, iv: bytes = b"\x11" * 16, trailer: byte
 def _encrypt_calllog_xml(xml_payload: bytes) -> bytes:
     iv = b"\x11" * 16
     return _encrypt_ivprefix(xml_payload, iv=iv)
+
+def _encrypt_legacy_calllog_xml(xml_payload: bytes) -> bytes:
+    pad_len = (16 - (len(xml_payload) % 16)) % 16
+    padded = xml_payload + (b"\x00" * pad_len)
+    return AES.new(derive_dummy_key(), AES.MODE_CBC, DEFAULT_PENC_IV).encrypt(padded)
 
 
 def test_inventory_detects_media_watch_contacts_and_calllog(tmp_path: Path) -> None:
@@ -107,6 +112,27 @@ def test_export_calllog_to_csv(tmp_path: Path) -> None:
     csv_text = csv_path.read_text(encoding="utf-8")
     assert "Number" in csv_text
     assert "+123" in csv_text
+
+
+def test_export_legacy_calllog_with_invalid_xml_control_to_csv(tmp_path: Path) -> None:
+    backup = tmp_path / "backup"
+    calllog_dir = backup / "CALLLOG"
+    calllog_dir.mkdir(parents=True)
+    xml_payload = (
+        b'<?xml version="1.0" encoding="UTF-8"?><CallLogs>'
+        b'<CallLog Number="+123"><Name>Old\x08 contact</Name></CallLog>'
+        b"</CallLogs>"
+    )
+    with zipfile.ZipFile(calllog_dir / "CALLLOG.zip", mode="w") as archive:
+        archive.writestr("/call_log.exml", _encrypt_legacy_calllog_xml(xml_payload))
+
+    out = tmp_path / "out"
+    result = export_call_log(backup, out, output_format="csv")
+
+    assert result.ok
+    csv_text = (out / "call_log" / "call_log.csv").read_text(encoding="utf-8")
+    assert "+123" in csv_text
+    assert "Old contact" in csv_text
 
 
 def test_export_watch_backup_decodes_encp_payloads(tmp_path: Path) -> None:

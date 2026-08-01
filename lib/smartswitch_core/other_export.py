@@ -96,13 +96,19 @@ def _decode_and_write_if_encrypted(
     name_hint: str,
     destination: Path,
     dummy_hex: str,
+    backup_password: str | None,
 ) -> tuple[Path | None, int, list[str]]:
     warnings: list[str] = []
     if not is_probably_encrypted_name(name_hint):
         return None, 0, warnings
 
     try:
-        decoded = decode_iv_prefix_payload(raw, dummy_hex=dummy_hex, name_hint=name_hint)
+        decoded = decode_iv_prefix_payload(
+            raw,
+            dummy_hex=dummy_hex,
+            password=backup_password,
+            name_hint=name_hint,
+        )
     except ValueError:
         return None, 0, warnings
 
@@ -135,6 +141,7 @@ def export_other_entry(
     *,
     category: str = "other_data",
     dummy_hex: str = DEFAULT_DUMMY_HEX,
+    backup_password: str | None = None,
 ) -> ExportResult:
     outputs: list[Path] = []
     warnings: list[str] = []
@@ -171,6 +178,7 @@ def export_other_entry(
                 name_hint=path.name,
                 destination=decoded_out / rel,
                 dummy_hex=dummy_hex,
+                backup_password=backup_password,
             )
             warnings.extend(local_warnings)
             if decoded_path is not None:
@@ -207,6 +215,7 @@ def export_other_entry(
                                 name_hint=Path(info.filename).name,
                                 destination=decoded_out / decoded_rel,
                                 dummy_hex=dummy_hex,
+                                backup_password=backup_password,
                             )
                             warnings.extend(local_warnings)
                             if decoded_path is not None:
@@ -236,6 +245,7 @@ def export_other_entry(
                     name_hint=source.name,
                     destination=decoded_out / source.name,
                     dummy_hex=dummy_hex,
+                    backup_password=backup_password,
                 )
                 warnings.extend(local_warnings)
                 if decoded_path is not None:
@@ -264,6 +274,7 @@ def export_other_entry(
                                 name_hint=Path(info.filename).name,
                                 destination=decoded_out / source.stem / info.filename.replace("\\", "/").lstrip("/"),
                                 dummy_hex=dummy_hex,
+                                backup_password=backup_password,
                             )
                             warnings.extend(local_warnings)
                             if decoded_path is not None:
@@ -298,6 +309,7 @@ def export_storage_entry(
     out_dir: Path,
     *,
     dummy_hex: str = DEFAULT_DUMMY_HEX,
+    backup_password: str | None = None,
 ) -> ExportResult:
     return export_other_entry(
         backup_dir,
@@ -305,6 +317,7 @@ def export_storage_entry(
         out_dir,
         category="storage",
         dummy_hex=dummy_hex,
+        backup_password=backup_password,
     )
 
 
@@ -314,6 +327,7 @@ def export_settings_entry(
     out_dir: Path,
     *,
     dummy_hex: str = DEFAULT_DUMMY_HEX,
+    backup_password: str | None = None,
 ) -> ExportResult:
     return export_other_entry(
         backup_dir,
@@ -321,4 +335,5 @@ def export_settings_entry(
         out_dir,
         category="settings",
         dummy_hex=dummy_hex,
+        backup_password=backup_password,
     )

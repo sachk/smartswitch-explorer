@@ -16,6 +16,70 @@ This decoder is used for:
 - many encrypted members in other category zip archives (`.enc`, `.exml`, `*Encrypted*`, `enc_*`)
 - Galaxy Watch `*encp` files in `GALAXYWATCH_CURRENT`/`GALAXYWATCH_BACKUP`
 
+### Password/PIN compatibility
+
+When a backup password is entered in Export Options, the shared decoder also tries the
+Smart Switch 4.1.16 PIN-based layouts documented by Park, Kim, and Kim:
+
+- `MK = PBKDF2-HMAC-SHA1(password, legacy dummy/DK, 1000, 32)`
+- equation 5: `AES-128-CBC` with `SHA-256(MK)[0:16]` and a prefixed IV
+- equation 6: `AES-256-CBC` with
+  `PBKDF2-HMAC-SHA1(MK, prefixed salt, 1000, 32)`, a prefixed IV, and a prefixed salt
+
+The direct dummy-key derivation remains a candidate for newer formats. The password is passed
+to message, call-log, application, settings, storage, and other-category exports. This gives
+Secure Folder backup categories the same generic encrypted-member recovery path while always
+preserving their raw files.
+
+These PIN-derived compatibility paths are covered with generated fixtures but have not yet
+been verified against a real password-protected Smart Switch backup. Smart Switch versions and
+devices may use a different DK or wrapping format; in that case the raw export remains intact.
+
+### RCS message databases
+
+`RcsMessage.edb` is an AES-CBC encrypted ZIP containing `mmssms.db`. JSON exports now contain
+the `im` and `ft` tables; CSV exports write `rcs_im.csv` and `rcs_ft.csv`. Native mode preserves
+the encrypted EDB unchanged.
+
+### Legacy call logs
+
+Call-log conversion accepts the normal prefixed-IV layout, the older fixed-IV layout, and
+plaintext XML. Illegal XML 1.0 control bytes are removed before parsing so a malformed contact
+field does not prevent the remaining call log from being exported.
+
+## Application backup payloads
+
+### Partial APK encryption (`APKFILE/*.penc`)
+
+Smart Switch Mobile 3.7.71.16 uses this layout:
+
+- 4-byte big-endian encrypted-segment length (at most `0x100010`)
+- an AES-CBC/PKCS#5 encrypted prefix
+  - fixed IV `26c7d1d26c142de0a3b82f7e8f90860a`
+  - 128-bit key: first 16 bytes of SHA-256 over the backup dummy string
+- the remainder of the APK ZIP stored unchanged
+
+When the dummy key is unavailable, the ZIP central directory and entries wholly beyond the
+encrypted prefix remain recoverable. The exporter writes those entries to
+`apk_recovered_files`; entries overlapping the prefix fail their ZIP integrity checks.
+
+For external-storage backups, Smart Switch reads `Dummy` from `SmartSwitchBackup.json`. A
+64-character hexadecimal value is decoded to a UTF-8 string before key derivation. PC backups
+can instead use a device/session dummy supplied during backup. Constants embedded in the APK
+implement legacy defaults and key derivation; they do not reproduce a randomly supplied dummy.
+
+### Android application data (`APKFILE/*.data`)
+
+These are Android Backup version 5 archives using `AES-256`. The archive contains salts,
+PBKDF2 rounds, an IV, and an encrypted master-key blob, but not the password/dummy needed to
+unwrap that blob. The exporter tries an explicitly supplied password, supported root metadata
+fields, and the legacy Smart Switch default.
+
+In the supplied S25 sample, `SmartSwitchBackup.json` was removed. Neither the remaining
+`backupHistoryInfo.xml` `Dummy` value nor the constants found in Smart Switch Mobile 3.7.71.16
+unlock the PENC prefix or Android Backup master key. The intact root JSON files are therefore
+required for full decryption of this sample.
+
 ## Galaxy Watch notes
 
 - `GALAXYWATCH_*_FileEncryptionInfo.json` is used to map encrypted file names to original logical paths.

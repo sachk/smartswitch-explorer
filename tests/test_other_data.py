@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+
 import zipfile
 from pathlib import Path
 
 from Crypto.Cipher import AES
 
-from smartswitch_core.crypto.common import derive_dummy_key
+from smartswitch_core.crypto.common import DEFAULT_DUMMY_HEX, derive_dummy_key
 from smartswitch_core.other_export import export_other_entry, export_settings_entry, export_storage_entry
 from smartswitch_core.scan import build_inventory
 
@@ -15,6 +17,19 @@ def _encrypt_ivprefix(payload: bytes, *, iv: bytes = b"\x22" * 16) -> bytes:
     padded = payload + (b"\x00" * pad_len)
     ct = AES.new(derive_dummy_key(), AES.MODE_CBC, iv).encrypt(padded)
     return iv + ct
+
+def _encrypt_password_ivprefix(payload: bytes, password: str, *, iv: bytes = b"\x33" * 16) -> bytes:
+    master_key = hashlib.pbkdf2_hmac(
+        "sha1",
+        password.encode(),
+        bytes.fromhex(DEFAULT_DUMMY_HEX),
+        1000,
+        dklen=32,
+    )
+    key = hashlib.sha256(master_key).digest()[:16]
+    pad_len = (16 - (len(payload) % 16)) % 16
+    padded = payload + (b"\x00" * pad_len)
+    return iv + AES.new(key, AES.MODE_CBC, iv).encrypt(padded)
 
 
 def test_scanner_adds_other_backup_data_root(tmp_path: Path) -> None:
@@ -127,3 +142,29 @@ def test_export_other_entry_decodes_encrypted_zip_member(tmp_path: Path) -> None
     decoded = out / "other_data" / "ALARM" / "decoded" / "ALARM" / "alarm.xml"
     assert decoded.exists()
     assert "<Alarm>" in decoded.read_text(encoding="utf-8")
+
+
+def test_export_secure_folder_entry_with_backup_password(tmp_path: Path) -> None:
+    backup = tmp_path / "backup"
+    secure_folder = backup / "SECUREFOLDER"
+    secure_folder.mkdir(parents=True)
+    password = "2468"
+    (secure_folder / "private.exml").write_bytes(
+        _encrypt_password_ivprefix(
+            b"<?xml version='1.0'?><SecureFolder><Item id='1'/></SecureFolder>",
+            password,
+        )
+    )
+
+    out = tmp_path / "out"
+    result = export_other_entry(
+        backup,
+        "SECUREFOLDER",
+        out,
+        backup_password=password,
+    )
+
+    assert result.ok
+    decoded = out / "other_data" / "SECUREFOLDER" / "decoded" / "private.xml"
+    assert decoded.exists()
+    assert "<SecureFolder>" in decoded.read_text(encoding="utf-8")

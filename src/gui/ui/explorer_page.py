@@ -186,8 +186,14 @@ class ExplorerPage(QWidget):
         has_app_data = any(node["kind"] == "app_data" for node in selected)
         has_contacts = any(node["kind"] == "contacts" for node in selected)
         has_calllog = any(node["kind"] == "calllog" for node in selected)
+        has_encrypted_other = any(
+            node["kind"] in {"other_entry", "storage_entry", "settings_entry"}
+            for node in selected
+        )
 
-        if not has_messages and not has_app_data and not has_contacts and not has_calllog:
+        if not any(
+            (has_messages, has_app_data, has_contacts, has_calllog, has_encrypted_other)
+        ):
             self.run_action_requested.emit({}, selected, self.destination_path())
             return
 
@@ -196,6 +202,7 @@ class ExplorerPage(QWidget):
             has_app_data=has_app_data,
             has_contacts=has_contacts,
             has_calllog=has_calllog,
+            has_encrypted_other=has_encrypted_other,
             parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:

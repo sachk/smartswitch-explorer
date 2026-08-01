@@ -8,7 +8,9 @@ import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path, PurePosixPath
 
-from smartswitch_core.crypto.common import DEFAULT_DUMMY_HEX
+from Crypto.Cipher import AES
+
+from smartswitch_core.crypto.common import DEFAULT_DUMMY_HEX, DEFAULT_PENC_IV, derive_dummy_key
 from smartswitch_core.crypto.smartdecrypt import (
     decode_iv_prefix_payload,
     extract_xml_region,
@@ -293,14 +295,56 @@ def export_contacts(
     return ExportResult(ok=not errors, outputs=outputs, warnings=warnings, errors=errors)
 
 
-def _decrypt_call_log_exml(raw: bytes, dummy_hex: str) -> bytes:
-    decoded = decode_iv_prefix_payload(
-        raw,
-        dummy_hex=dummy_hex,
-        name_hint="call_log.exml",
-        xml_root_tag="CallLogs",
+def _sanitize_xml_payload(payload: bytes) -> bytes:
+    text = payload.decode("utf-8", "replace")
+    sanitized = "".join(
+        char
+        for char in text
+        if char in "\t\n\r" or ord(char) >= 0x20
     )
-    return extract_xml_region(decoded.payload, root_tag="CallLogs")
+    return sanitized.encode("utf-8")
+
+
+def _decrypt_call_log_exml(
+    raw: bytes,
+    dummy_hex: str,
+    backup_password: str | None = None,
+) -> bytes:
+    candidates: list[bytes] = [raw]
+    failures: list[str] = []
+
+    try:
+        decoded = decode_iv_prefix_payload(
+            raw,
+            dummy_hex=dummy_hex,
+            name_hint="call_log.exml",
+            xml_root_tag="CallLogs",
+            password=backup_password,
+        )
+        candidates.append(decoded.payload)
+    except ValueError as exc:
+        failures.append(str(exc))
+
+    aligned_size = len(raw) - (len(raw) % AES.block_size)
+    if aligned_size:
+        legacy = AES.new(
+            derive_dummy_key(dummy_hex),
+            AES.MODE_CBC,
+            DEFAULT_PENC_IV,
+        ).decrypt(raw[:aligned_size])
+        candidates.append(legacy)
+
+    for candidate in candidates:
+        try:
+            xml_payload = extract_xml_region(candidate, root_tag="CallLogs")
+            sanitized = _sanitize_xml_payload(xml_payload)
+            ET.fromstring(sanitized)
+            return sanitized
+        except (UnicodeError, ValueError, ET.ParseError) as exc:
+            failures.append(str(exc))
+
+    detail = failures[-1] if failures else "CallLogs XML was not found"
+    raise ValueError(f"Unsupported call log encryption or invalid XML: {detail}")
 
 
 def _call_log_rows(xml_payload: bytes) -> list[dict[str, str]]:
@@ -340,6 +384,7 @@ def export_call_log(
     *,
     output_format: str = "csv",
     dummy_hex: str = DEFAULT_DUMMY_HEX,
+    backup_password: str | None = None,
 ) -> ExportResult:
     outputs: list[Path] = []
     warnings: list[str] = []
@@ -379,7 +424,7 @@ def export_call_log(
             errors.append(f"Failed to read call log archive: {exc}")
         else:
             try:
-                decrypted_xml = _decrypt_call_log_exml(encrypted, dummy_hex)
+                decrypted_xml = _decrypt_call_log_exml(encrypted, dummy_hex, backup_password)
                 xml_path = out_root / "call_log.xml"
                 xml_path.write_bytes(decrypted_xml)
                 outputs.append(xml_path)
