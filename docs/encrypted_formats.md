@@ -70,15 +70,49 @@ implement legacy defaults and key derivation; they do not reproduce a randomly s
 
 ### Android application data (`APKFILE/*.data`)
 
-These are Android Backup version 5 archives using `AES-256`. The archive contains salts,
-PBKDF2 rounds, an IV, and an encrypted master-key blob, but not the password/dummy needed to
-unwrap that blob. The exporter tries an explicitly supplied password, supported root metadata
-fields, and the legacy Smart Switch default.
+`APKFILE/<package>.data` files use the Android Backup stream format when they
+start with `ANDROID BACKUP`.
 
-In the supplied S25 sample, `SmartSwitchBackup.json` was removed. Neither the remaining
-`backupHistoryInfo.xml` `Dummy` value nor the constants found in Smart Switch Mobile 3.7.71.16
-unlock the PENC prefix or Android Backup master key. The intact root JSON files are therefore
-required for full decryption of this sample.
+The implemented decoder validates the encrypted Android Backup header before
+extracting:
+
+- backup version, compressed flag, and encryption algorithm
+- salt, IV, and ciphertext lengths
+- AES-CBC/PKCS#7 padding for the encrypted master-key blob
+- the complete master-key blob structure: master IV, master key, and checksum
+- PBKDF2-HMAC-SHA1 master-key checksum
+- AES-CBC/PKCS#7 padding for the payload
+- zlib decompression when the header says the stream is compressed
+- TAR structure and safe TAR member names/types
+
+The default Smart Switch dummy value is still used as the available credential
+for compatibility with older project behavior. It is not treated as proof of a
+valid `.data` password: a candidate credential is accepted only if the master-key
+checksum validates and the decrypted result is a valid TAR stream.
+
+If a real `.data` file has a valid Android Backup header but cannot unwrap the
+master key with the available credential, the app reports:
+
+```text
+Unable to unwrap the master key with the available credential.
+The backup may require a different Smart Switch session key or password.
+```
+
+This means the file is encrypted with a credential the project does not have. It
+does not by itself imply corruption.
+
+Non-sensitive diagnostics can be collected without printing passwords, keys,
+salts, IVs, decrypted content, or TAR member names:
+
+```bash
+uv run python scripts/diagnose_data_file.py --try-empty /path/to/APKFILE/package.data
+```
+
+For an optional local real-file test:
+
+```bash
+SMARTSWITCH_REAL_DATA=/path/to/APKFILE/package.data uv run pytest -m real_backup -v
+```
 
 ## Galaxy Watch notes
 

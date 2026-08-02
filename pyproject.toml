@@ -45,3 +45,6 @@ packages = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "real_backup: optional tests that inspect a local Smart Switch backup file supplied via environment variables",
+]

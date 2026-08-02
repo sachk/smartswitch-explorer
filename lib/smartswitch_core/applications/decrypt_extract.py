@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import io
 import json
 import shutil
@@ -15,9 +14,14 @@ from pathlib import Path
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
 
+from smartswitch_core.applications.android_backup import (
+    AndroidBackupDecodeError,
+    decode_android_backup_file,
+)
 from smartswitch_core.crypto.common import DEFAULT_DUMMY_HEX, DEFAULT_PENC_IV, derive_dummy_key
 from smartswitch_core.export import write_manifest
 from smartswitch_core.models import ExportResult
+from smartswitch_core.path_safety import safe_output_path
 
 
 class AppDataPasswordError(ValueError):
@@ -26,6 +30,13 @@ class AppDataPasswordError(ValueError):
 
 class AppApkDecryptionError(ValueError):
     """The legacy Smart Switch APK key did not decrypt a PENC payload."""
+
+
+_CREDENTIAL_FAILURE_PHASES = {
+    "master-key padding failure",
+    "malformed master-key structure",
+    "master-key checksum mismatch",
+}
 
 _PASSWORD_FIELD_NAMES = {
     "backuppassword",
@@ -81,15 +92,9 @@ def _metadata_password_candidates(backup_dir: Path) -> list[tuple[str, str]]:
                     break
     return candidates
 
+
 def _safe_join(root: Path, relative_name: str) -> Path:
-    safe_rel = Path(relative_name.replace("\\", "/")).as_posix().lstrip("/")
-    candidate = (root / safe_rel).resolve()
-    root_resolved = root.resolve()
-    try:
-        candidate.relative_to(root_resolved)
-    except ValueError as exc:
-        raise ValueError("Unsafe output path") from exc
-    return candidate
+    return safe_output_path(root, relative_name)
 
 
 def _decrypt_penc(path: Path, dummy: str) -> bytes:
@@ -266,71 +271,7 @@ def _split_android_backup_header(raw: bytes, n_lines: int = 9) -> tuple[list[byt
 
 
 def _decode_data_payload(path: Path, password: str) -> tuple[bytes, dict]:
-    raw = path.read_bytes()
-    lines, payload_offset = _split_android_backup_header(raw)
-    if lines[0] != b"ANDROID BACKUP":
-        raise ValueError("Not an Android backup data file")
-
-    try:
-        version = lines[1].decode("ascii")
-        compressed = int(lines[2].decode("ascii"))
-        algorithm = lines[3].decode("ascii")
-        user_salt = bytes.fromhex(lines[4].decode("ascii"))
-        rounds = int(lines[6].decode("ascii"))
-        user_iv = bytes.fromhex(lines[7].decode("ascii"))
-        mk_blob = bytes.fromhex(lines[8].decode("ascii"))
-    except (UnicodeDecodeError, ValueError) as exc:
-        raise ValueError(f"Invalid Android backup header: {exc}") from exc
-
-    if algorithm != "AES-256":
-        raise ValueError(f"Unsupported Android backup encryption algorithm: {algorithm}")
-    if len(user_iv) != 16 or not mk_blob or len(mk_blob) % 16:
-        raise ValueError("Invalid encrypted Android backup key")
-
-    user_key = hashlib.pbkdf2_hmac(
-        "sha1", password.encode("utf-8"), user_salt, rounds, dklen=32
-    )
-    try:
-        unwrapped = unpad(AES.new(user_key, AES.MODE_CBC, user_iv).decrypt(mk_blob), 16)
-    except ValueError as exc:
-        raise AppDataPasswordError("Android backup password was rejected") from exc
-
-    try:
-        iv_len = unwrapped[0]
-        cursor = 1
-        mk_iv = unwrapped[cursor : cursor + iv_len]
-        cursor += iv_len
-        mk_len = unwrapped[cursor]
-        cursor += 1
-        mk = unwrapped[cursor : cursor + mk_len]
-    except IndexError as exc:
-        raise ValueError("Invalid decrypted Android backup key") from exc
-    if len(mk_iv) != iv_len or len(mk) != mk_len or len(mk_iv) != 16:
-        raise ValueError("Invalid decrypted Android backup key")
-
-    payload_enc = raw[payload_offset:]
-    if not payload_enc:
-        payload = b""
-    else:
-        if len(payload_enc) % 16:
-            raise ValueError("Encrypted Android backup payload is not AES aligned")
-        try:
-            payload = unpad(AES.new(mk, AES.MODE_CBC, mk_iv).decrypt(payload_enc), 16)
-        except ValueError as exc:
-            raise ValueError("Android backup payload is damaged or uses an unsupported format") from exc
-        if compressed:
-            try:
-                payload = zlib.decompress(payload)
-            except zlib.error as exc:
-                raise ValueError(f"Invalid compressed Android backup payload: {exc}") from exc
-
-    meta = {
-        "version": version,
-        "compressed": compressed,
-        "algorithm": algorithm,
-        "payload_len": len(payload),
-    }
-    return payload, meta
+    return decode_android_backup_file(path, password)
 
 
 def _decode_data_with_candidates(
@@ -358,8 +299,10 @@ def _decode_data_with_candidates(
         seen.add(password)
         try:
             payload, meta = _decode_data_payload(path, password)
-        except AppDataPasswordError:
-            continue
+        except AndroidBackupDecodeError as exc:
+            if exc.phase in _CREDENTIAL_FAILURE_PHASES:
+                continue
+            raise
         meta["password_source"] = source
         return payload, meta
 
@@ -392,10 +335,13 @@ def _safe_extract_tar(payload: bytes, out_dir: Path) -> tuple[int, list[str]]:
                 try:
                     target = _safe_join(out_dir, member.name)
                 except ValueError:
-                    warnings.append(f"Skipped unsafe tar member: {member.name}")
+                    warnings.append("Skipped unsafe tar member path")
                     continue
                 if member.isdir():
                     target.mkdir(parents=True, exist_ok=True)
+                    continue
+                if not member.isfile():
+                    warnings.append("Skipped unsupported tar member type")
                     continue
                 parent = target.parent
                 parent.mkdir(parents=True, exist_ok=True)
