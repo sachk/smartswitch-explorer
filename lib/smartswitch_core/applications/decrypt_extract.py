@@ -4,11 +4,9 @@ import io
 import json
 import shutil
 import string
-import struct
+import stat
 import tarfile
-import xml.etree.ElementTree as ET
 import zipfile
-import zlib
 from pathlib import Path
 
 from Crypto.Cipher import AES
@@ -16,9 +14,15 @@ from Crypto.Util.Padding import unpad
 
 from smartswitch_core.applications.android_backup import (
     AndroidBackupDecodeError,
+    UNAVAILABLE_CREDENTIAL_MESSAGE,
     decode_android_backup_file,
 )
 from smartswitch_core.crypto.common import DEFAULT_DUMMY_HEX, DEFAULT_PENC_IV, derive_dummy_key
+from smartswitch_core.crypto.session_credentials import (
+    SessionCredential,
+    SessionCredentialError,
+    load_session_credential,
+)
 from smartswitch_core.export import write_manifest
 from smartswitch_core.models import ExportResult
 from smartswitch_core.path_safety import safe_output_path
@@ -32,6 +36,7 @@ class AppApkDecryptionError(ValueError):
     """The legacy Smart Switch APK key did not decrypt a PENC payload."""
 
 
+_PENC_ENCRYPTED_PREFIX_BYTES = 1024 * 1024
 _CREDENTIAL_FAILURE_PHASES = {
     "master-key padding failure",
     "malformed master-key structure",
@@ -78,19 +83,39 @@ def _metadata_password_candidates(backup_dir: Path) -> list[tuple[str, str]]:
                     visit(child)
 
         visit(metadata)
-
-    history_path = backup_dir / "backupHistoryInfo.xml"
-    if history_path.exists():
-        try:
-            root = ET.fromstring(history_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, ET.ParseError):
-            root = None
-        if root is not None:
-            for element in root.iter():
-                if element.tag.rsplit("}", 1)[-1].lower() == "dummy" and element.text:
-                    candidates.append((f"{history_path.name}:Dummy", element.text.strip()))
-                    break
     return candidates
+
+
+def _application_credential_candidates(
+    backup_dir: Path,
+    *,
+    supplied_password: str | None,
+    fallback_password: str,
+    include_empty: bool = False,
+) -> list[SessionCredential]:
+    candidates: list[SessionCredential] = []
+    if supplied_password is not None:
+        candidates.append(SessionCredential(supplied_password, "Export Options"))
+    try:
+        candidates.append(load_session_credential(backup_dir))
+    except SessionCredentialError:
+        pass
+    candidates.extend(
+        SessionCredential(value, source)
+        for source, value in _metadata_password_candidates(backup_dir)
+    )
+    candidates.append(SessionCredential(fallback_password, "Smart Switch legacy key"))
+    if include_empty:
+        candidates.append(SessionCredential("", "empty password"))
+
+    deduplicated: list[SessionCredential] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate.value in seen:
+            continue
+        seen.add(candidate.value)
+        deduplicated.append(candidate)
+    return deduplicated
 
 
 def _safe_join(root: Path, relative_name: str) -> Path:
@@ -103,23 +128,56 @@ def _decrypt_penc(path: Path, dummy: str) -> bytes:
         raise ValueError(".penc file too small")
 
     encrypted_size = int.from_bytes(raw[:4], "big")
-    if encrypted_size <= 0 or encrypted_size > 0x100010:
+    if encrypted_size <= 0 or encrypted_size > _PENC_ENCRYPTED_PREFIX_BYTES + AES.block_size:
         raise ValueError(f"Invalid .penc encrypted segment size: {encrypted_size}")
     encrypted_end = 4 + encrypted_size
-    if encrypted_end > len(raw) or encrypted_size % 16:
+    if encrypted_end > len(raw) or encrypted_size % AES.block_size:
         raise ValueError("Truncated or unaligned .penc encrypted segment")
 
     encrypted = raw[4:encrypted_end]
     decrypted = AES.new(derive_dummy_key(dummy), AES.MODE_CBC, DEFAULT_PENC_IV).decrypt(encrypted)
     try:
-        decrypted = unpad(decrypted, 16)
+        prefix = unpad(decrypted, AES.block_size)
     except ValueError as exc:
         raise AppApkDecryptionError("Smart Switch backup dummy key was rejected") from exc
-
-    apk = decrypted + raw[encrypted_end:]
-    if not apk.startswith(b"PK\x03\x04"):
+    suffix = raw[encrypted_end:]
+    if suffix and len(prefix) != _PENC_ENCRYPTED_PREFIX_BYTES:
         raise AppApkDecryptionError("Smart Switch backup dummy key was rejected")
+
+    apk = prefix + suffix
+    try:
+        _validate_apk(apk)
+    except ValueError as exc:
+        raise AppApkDecryptionError("Smart Switch backup dummy key was rejected") from exc
     return apk
+
+
+def _validate_apk(data: bytes) -> dict[str, object]:
+    if not data.startswith(b"PK\x03\x04"):
+        raise ValueError("Decrypted .penc does not have ZIP magic")
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            names = set(archive.namelist())
+            if archive.testzip() is not None:
+                raise ValueError("Decrypted APK failed a ZIP CRC check")
+    except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
+        raise ValueError("Decrypted .penc is not a valid ZIP archive") from exc
+
+    if "AndroidManifest.xml" not in names:
+        raise ValueError("Decrypted ZIP is missing AndroidManifest.xml")
+    dex_files = sorted(
+        name
+        for name in names
+        if name == "classes.dex" or name.startswith("classes") and name.endswith(".dex")
+    )
+    if "classes.dex" not in dex_files:
+        raise ValueError("Decrypted APK is missing classes.dex")
+    return {
+        "zip_entries": len(names),
+        "zip_crc": "valid",
+        "android_manifest": True,
+        "dex_files": len(dex_files),
+    }
 
 
 def _decode_penc_with_candidates(
@@ -129,31 +187,22 @@ def _decode_penc_with_candidates(
     supplied_password: str | None,
     fallback_password: str,
 ) -> tuple[bytes, str]:
-    candidates = _metadata_password_candidates(backup_dir)
-    if supplied_password is not None:
-        candidates.insert(0, ("Export Options", supplied_password))
-    candidates.append(("legacy Smart Switch key", fallback_password))
-
-    seen: set[str] = set()
-    for source, password in candidates:
-        if password in seen:
-            continue
-        seen.add(password)
+    candidates = _application_credential_candidates(
+        backup_dir,
+        supplied_password=supplied_password,
+        fallback_password=fallback_password,
+    )
+    for candidate in candidates:
         try:
-            return _decrypt_penc(path, password), source
+            return _decrypt_penc(path, candidate.value), candidate.source
         except AppApkDecryptionError:
             continue
 
-    missing_metadata = not (backup_dir / "SmartSwitchBackup.json").exists()
-    reason = (
-        "SmartSwitchBackup.json is missing from this backup copy. "
-        if missing_metadata
-        else ""
-    )
     raise AppApkDecryptionError(
-        f"{reason}None of the available Smart Switch backup dummy keys could decrypt "
-        "the PENC header. Export Application APKs to preserve the raw PENC file."
+        "None of the available Smart Switch credentials produced a valid APK. "
+        "Export Application APKs to preserve the raw PENC file."
     )
+
 
 def _extract_recoverable_penc_entries(
     path: Path,
@@ -175,6 +224,9 @@ def _extract_recoverable_penc_entries(
                 continue
             target: Path | None = None
             try:
+                member_type = stat.S_IFMT(member.external_attr >> 16)
+                if member_type and member_type != stat.S_IFREG:
+                    raise ValueError("Unsupported ZIP member type")
                 target = _safe_join(out_dir, member.filename)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with archive.open(member) as source, target.open("wb") as destination:
@@ -197,63 +249,31 @@ def _extract_recoverable_penc_entries(
     return recovered, failed, warnings
 
 
-
 def _extract_local_entries(data: bytes, out_dir: Path) -> tuple[int, int, list[str]]:
     out_dir.mkdir(parents=True, exist_ok=True)
     extracted = 0
     skipped = 0
     warnings: list[str] = []
 
-    offset = 0
-    while offset + 30 <= len(data) and data[offset : offset + 4] == b"PK\x03\x04":
-        (
-            _sig,
-            _ver,
-            _flag,
-            method,
-            _mtime,
-            _mdate,
-            _crc,
-            compressed_size,
-            _uncompressed_size,
-            file_name_len,
-            extra_len,
-        ) = struct.unpack("<IHHHHHIIIHH", data[offset : offset + 30])
-
-        name_start = offset + 30
-        name_end = name_start + file_name_len
-        data_start = name_end + extra_len
-        data_end = data_start + compressed_size
-
-        if data_end > len(data) or data_end <= offset:
-            warnings.append("Truncated local entry encountered")
-            break
-
-        name = data[name_start:name_end].decode("utf-8", "replace")
-        blob = data[data_start:data_end]
-
-        try:
-            target = _safe_join(out_dir, name)
-            target.parent.mkdir(parents=True, exist_ok=True)
-
-            if method == 0:
-                target.write_bytes(blob)
-                extracted += 1
-            elif method == 8:
-                try:
-                    target.write_bytes(zlib.decompress(blob, -15))
-                    extracted += 1
-                except zlib.error:
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        for info in archive.infolist():
+            try:
+                target = _safe_join(out_dir, info.filename)
+                if info.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                member_type = stat.S_IFMT(info.external_attr >> 16)
+                if member_type and member_type != stat.S_IFREG:
                     skipped += 1
-                    warnings.append(f"Failed to inflate: {name}")
-            else:
+                    warnings.append("Skipped unsupported ZIP member type")
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(info) as source, target.open("wb") as handle:
+                    shutil.copyfileobj(source, handle)
+                extracted += 1
+            except (OSError, RuntimeError, ValueError, zipfile.BadZipFile):
                 skipped += 1
-                warnings.append(f"Unsupported compression method {method}: {name}")
-        except (OSError, ValueError) as exc:
-            skipped += 1
-            warnings.append(f"Failed to write {name}: {exc}")
-
-        offset = data_end
+                warnings.append("Failed to extract a ZIP member")
 
     return extracted, skipped, warnings
 
@@ -281,45 +301,26 @@ def _decode_data_with_candidates(
     supplied_password: str | None,
     fallback_password: str,
 ) -> tuple[bytes, dict]:
-    candidates: list[tuple[str, str]] = []
-    if supplied_password is not None:
-        candidates.append(("Export Options", supplied_password))
-    candidates.extend(_metadata_password_candidates(backup_dir))
-    candidates.extend(
-        [
-            ("Smart Switch legacy key", fallback_password),
-            ("empty password", ""),
-        ]
+    candidates = _application_credential_candidates(
+        backup_dir,
+        supplied_password=supplied_password,
+        fallback_password=fallback_password,
+        include_empty=True,
     )
 
-    seen: set[str] = set()
-    for source, password in candidates:
-        if password in seen:
-            continue
-        seen.add(password)
+    last_credential_error: AndroidBackupDecodeError | None = None
+    for candidate in candidates:
         try:
-            payload, meta = _decode_data_payload(path, password)
+            payload, meta = _decode_data_payload(path, candidate.value)
         except AndroidBackupDecodeError as exc:
             if exc.phase in _CREDENTIAL_FAILURE_PHASES:
+                last_credential_error = exc
                 continue
             raise
-        meta["password_source"] = source
+        meta["password_source"] = candidate.source
         return payload, meta
 
-    missing_metadata = not (backup_dir / "SmartSwitchBackup.json").exists()
-    reason = (
-        "SmartSwitchBackup.json is missing from this backup copy. "
-        if missing_metadata
-        else ""
-    )
-    if supplied_password is not None:
-        reason += "The supplied app-data password was not accepted. "
-    raise AppDataPasswordError(
-        f"{reason}The Android app-data archive is encrypted, but none of the available "
-        "Smart Switch keys could unlock it. Smart Switch may encrypt app data without "
-        "showing a password prompt. Preserve all root JSON/XML metadata; if a backup "
-        "password was configured, enter it under Export Options."
-    )
+    raise AppDataPasswordError(UNAVAILABLE_CREDENTIAL_MESSAGE) from last_credential_error
 
 
 def _safe_extract_tar(payload: bytes, out_dir: Path) -> tuple[int, list[str]]:
@@ -400,6 +401,7 @@ def decrypt_extract_app(
                 manifest["penc"] = {
                     "decrypted_size": len(dec),
                     "key_source": key_source,
+                    "validation": "ZIP, CRC, AndroidManifest.xml, and classes.dex valid",
                 }
                 if include_decrypt:
                     dec_path = package_out / f"{package_id}.decrypted.apk"

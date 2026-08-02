@@ -19,19 +19,56 @@ from smartswitch_core.applications.android_backup import (
     decode_android_backup_file,
     inspect_android_backup_file,
 )
-from smartswitch_core.applications.decrypt_extract import copy_app_apk_payload, decrypt_extract_app
-from smartswitch_core.applications.decrypt_extract import _decode_data_payload, _safe_extract_tar, _safe_join
-from smartswitch_core.crypto.common import DEFAULT_PENC_IV, derive_dummy_key
+from smartswitch_core.applications.decrypt_extract import (
+    AppApkDecryptionError,
+    _decode_data_payload,
+    _decrypt_penc,
+    _safe_extract_tar,
+    _safe_join,
+    copy_app_apk_payload,
+    decrypt_extract_app,
+)
+from smartswitch_core.crypto.common import DEFAULT_DUMMY_HEX, DEFAULT_PENC_IV, derive_dummy_key
+from smartswitch_core.crypto.session_credentials import (
+    SessionCredentialError,
+    decrypt_windows_backup_history_dummy,
+    load_session_credential,
+)
 
 
-def _make_penc_from_plain(plain: bytes, dummy: str = "9AB412D3C1F2EF658BFC0CFFCCC344D44C0A") -> bytes:
-    encrypted_plain = plain[: 1024 * 1024]
+def _make_penc_from_plain(plain: bytes, dummy: str = DEFAULT_DUMMY_HEX) -> bytes:
+    prefix = plain[: 1024 * 1024]
     encrypted = AES.new(
         derive_dummy_key(dummy),
         AES.MODE_CBC,
         DEFAULT_PENC_IV,
-    ).encrypt(pad(encrypted_plain, 16))
-    return len(encrypted).to_bytes(4, "big") + encrypted + plain[len(encrypted_plain) :]
+    ).encrypt(pad(prefix, 16))
+    return len(encrypted).to_bytes(4, "big") + encrypted + plain[len(prefix) :]
+
+
+def _write_windows_backup_history(backup: Path, dummy: str) -> Path:
+    raw = dummy.encode("ascii")
+    padded = raw + (b"\x00" * ((-len(raw)) % 16))
+    encrypted = AES.new(b"0b1e96db05d64ea4", AES.MODE_ECB).encrypt(padded)
+    path = backup / "backupHistoryInfo.xml"
+    path.write_text(
+        '<BackupHistory xmlns="Kies.Common.Data"><Dummy>'
+        + encrypted.hex().upper()
+        + "</Dummy></BackupHistory>",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _make_apk(*, extra_size: int = 0) -> bytes:
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, mode="w", compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr("AndroidManifest.xml", b"binary manifest")
+        zf.writestr("classes.dex", b"dex\n035\x00")
+        zf.writestr("hello.txt", b"world")
+        if extra_size:
+            zf.writestr("assets/payload.bin", b"x" * extra_size)
+    return zip_buf.getvalue()
 
 
 def _make_key_checksum(master_key: bytes, checksum_salt: bytes, rounds: int, encoding_name: str) -> bytes:
@@ -105,11 +142,11 @@ def test_decrypt_extract_app_apk_and_data(tmp_path: Path) -> None:
     backup = tmp_path / "backup"
     apk_dir = backup / "APKFILE"
     apk_dir.mkdir(parents=True)
-    zip_buf = io.BytesIO()
+    session_dummy = "0123456789ABCDEF0123456789ABCDEF0123"
+    _write_windows_backup_history(backup, session_dummy)
+    (backup / "ReqItemsInfo.json").write_text('{"SecurityLevel":"LEVEL_1"}', encoding="utf-8")
 
-    with zipfile.ZipFile(zip_buf, mode="w", compression=zipfile.ZIP_STORED) as zf:
-        zf.writestr("hello.txt", b"world")
-    (apk_dir / "com.example.app.penc").write_bytes(_make_penc_from_plain(zip_buf.getvalue()))
+    (apk_dir / "com.example.app.penc").write_bytes(_make_penc_from_plain(_make_apk(), session_dummy))
 
     # Build a tiny tar payload for .data decoding.
     tar_buf = io.BytesIO()
@@ -120,7 +157,7 @@ def test_decrypt_extract_app_apk_and_data(tmp_path: Path) -> None:
         tf.addfile(info, io.BytesIO(payload))
     data_raw = _make_data_file_from_tar_payload(
         tar_buf.getvalue(),
-        password="9AB412D3C1F2EF658BFC0CFFCCC344D44C0A",
+        password=session_dummy,
     )
     (apk_dir / "com.example.app.data").write_bytes(data_raw)
 
@@ -135,9 +172,57 @@ def test_decrypt_extract_app_apk_and_data(tmp_path: Path) -> None:
     )
 
     assert result.ok
-    assert (out / "com.example.app" / "manifest.json").exists()
+    manifest_text = (out / "com.example.app" / "manifest.json").read_text(encoding="utf-8")
+    assert "backupHistoryInfo.xml (Windows session Dummy)" in manifest_text
+    assert session_dummy not in manifest_text
     assert (out / "com.example.app" / "apk_files" / "hello.txt").read_bytes() == b"world"
     assert (out / "com.example.app" / "data_files" / "apps" / "com.example.app" / "_manifest").exists()
+
+
+def test_windows_backup_history_recovers_session_dummy(tmp_path: Path) -> None:
+    dummy = "ABCDEF0123456789ABCDEF0123456789ABCD"
+    history = _write_windows_backup_history(tmp_path, dummy)
+    (tmp_path / "ReqItemsInfo.json").write_text('{"SecurityLevel":"LEVEL_1"}', encoding="utf-8")
+
+    credential = load_session_credential(tmp_path)
+
+    assert credential.value == dummy
+    assert credential.security_level == "LEVEL_1"
+    assert dummy not in repr(credential)
+    assert decrypt_windows_backup_history_dummy(history) == dummy
+
+
+def test_windows_backup_history_rejects_malformed_dummy(tmp_path: Path) -> None:
+    path = tmp_path / "backupHistoryInfo.xml"
+    path.write_text("<BackupHistory><Dummy>not-hex</Dummy></BackupHistory>", encoding="utf-8")
+
+    with pytest.raises(SessionCredentialError, match="not valid hexadecimal"):
+        decrypt_windows_backup_history_dummy(path)
+
+
+def test_decrypt_penc_handles_encrypted_one_mib_prefix(tmp_path: Path) -> None:
+    dummy = "ABCDEF0123456789ABCDEF0123456789ABCD"
+    apk = _make_apk(extra_size=1024 * 1024 + 4096)
+    path = tmp_path / "sample.penc"
+    path.write_bytes(_make_penc_from_plain(apk, dummy))
+
+    assert _decrypt_penc(path, dummy) == apk
+
+
+def test_decrypt_penc_preserves_legacy_default_credential(tmp_path: Path) -> None:
+    apk = _make_apk()
+    path = tmp_path / "sample.penc"
+    path.write_bytes(_make_penc_from_plain(apk))
+
+    assert _decrypt_penc(path, DEFAULT_DUMMY_HEX) == apk
+
+
+def test_decrypt_penc_rejects_valid_padding_without_apk(tmp_path: Path) -> None:
+    path = tmp_path / "sample.penc"
+    path.write_bytes(_make_penc_from_plain(b"not a ZIP archive"))
+
+    with pytest.raises(AppApkDecryptionError, match="rejected"):
+        _decrypt_penc(path, DEFAULT_DUMMY_HEX)
 
 
 def test_decode_data_payload_rejects_wrong_password(tmp_path: Path) -> None:
@@ -378,9 +463,8 @@ def test_app_uses_hex_encoded_dummy_from_backup_metadata(tmp_path: Path) -> None
         json.dumps({"Dummy": dummy.encode("utf-8").hex()}),
         encoding="utf-8",
     )
-    (apk_dir / "com.example.app.penc").write_bytes(
-        _make_penc_from_plain(b"PK\x03\x04payload", dummy=dummy)
-    )
+    apk = _make_apk()
+    (apk_dir / "com.example.app.penc").write_bytes(_make_penc_from_plain(apk, dummy=dummy))
     (apk_dir / "com.example.app.data").write_bytes(
         _make_data_file_from_tar_payload(_tar_payload(), password=dummy)
     )
@@ -398,7 +482,8 @@ def test_app_uses_hex_encoded_dummy_from_backup_metadata(tmp_path: Path) -> None
     assert not result.errors
     assert (
         tmp_path / "out" / "com.example.app" / "com.example.app.decrypted.apk"
-    ).read_bytes() == b"PK\x03\x04payload"
+    ).read_bytes() == apk
+
 
 def test_app_data_rejected_key_has_actionable_error(tmp_path: Path) -> None:
     backup = tmp_path / "backup"
@@ -418,8 +503,8 @@ def test_app_data_rejected_key_has_actionable_error(tmp_path: Path) -> None:
     )
 
     assert not result.ok
-    assert "SmartSwitchBackup.json is missing" in result.errors[0]
-    assert "without showing a password prompt" in result.errors[0]
+    assert "Unable to unwrap the master key with the available credential" in result.errors[0]
+    assert "different Smart Switch session key or password" in result.errors[0]
     assert "Padding" not in result.errors[0]
 
 
@@ -460,7 +545,7 @@ def test_app_apk_rejected_key_does_not_write_bogus_apk(tmp_path: Path) -> None:
     result = decrypt_extract_app("com.example.app", "apk", backup, out)
 
     assert not result.ok
-    assert "backup dummy keys" in result.errors[0]
+    assert "available Smart Switch credentials" in result.errors[0]
     assert not (out / "com.example.app" / "com.example.app.decrypted.apk").exists()
 
 

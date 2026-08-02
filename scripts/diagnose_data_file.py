@@ -8,10 +8,19 @@ import sys
 
 from smartswitch_core.applications.android_backup import inspect_android_backup_file
 from smartswitch_core.crypto.common import DEFAULT_DUMMY_HEX
+from smartswitch_core.crypto.session_credentials import SessionCredentialError, load_session_credential
 
 
 def _credential_candidates(args: argparse.Namespace) -> list[str]:
     candidates: list[str] = []
+    backup_dir = args.backup_dir or (
+        args.path.parent.parent if args.path.parent.name == "APKFILE" else None
+    )
+    if backup_dir is not None:
+        try:
+            candidates.append(load_session_credential(backup_dir).value)
+        except SessionCredentialError:
+            pass
     if args.use_default_credential:
         candidates.append(DEFAULT_DUMMY_HEX)
     if args.try_empty:
@@ -35,6 +44,11 @@ def main(argv: list[str] | None = None) -> int:
         description="Print non-sensitive diagnostics for a Samsung Smart Switch APKFILE .data file.",
     )
     parser.add_argument("path", type=Path)
+    parser.add_argument(
+        "--backup-dir",
+        type=Path,
+        help="Backup root containing backupHistoryInfo.xml; inferred for APKFILE paths.",
+    )
     parser.add_argument(
         "--password-env",
         default="SMARTSWITCH_DATA_PASSWORD",

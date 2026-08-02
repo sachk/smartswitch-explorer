@@ -85,10 +85,16 @@ extracting:
 - zlib decompression when the header says the stream is compressed
 - TAR structure and safe TAR member names/types
 
-The default Smart Switch dummy value is still used as the available credential
-for compatibility with older project behavior. It is not treated as proof of a
-valid `.data` password: a candidate credential is accepted only if the master-key
-checksum validates and the decrypted result is a valid TAR stream.
+For Smart Switch for Windows backups, the session `Dummy` is recovered from
+`backupHistoryInfo.xml`. Smart Switch stores that value as hexadecimal
+AES-128-ECB ciphertext with zero padding. For basic (`LEVEL_1`) backups, the
+recovered value is the password passed to the Android backup service. The old
+project constant remains a last compatibility candidate, but it is a value from
+another session rather than a universal Smart Switch credential.
+
+A candidate credential is accepted only if the master-key checksum validates
+and the decrypted result is a valid TAR stream. A malformed or absent metadata
+file therefore cannot turn random plaintext into accepted output.
 
 If a real `.data` file has a valid Android Backup header but cannot unwrap the
 master key with the available credential, the app reports:
@@ -99,7 +105,8 @@ The backup may require a different Smart Switch session key or password.
 ```
 
 This means the file is encrypted with a credential the project does not have. It
-does not by itself imply corruption.
+does not by itself imply corruption. PIN-protected backup credential derivation
+is not currently exposed by the application.
 
 Non-sensitive diagnostics can be collected without printing passwords, keys,
 salts, IVs, decrypted content, or TAR member names:
@@ -108,11 +115,37 @@ salts, IVs, decrypted content, or TAR member names:
 uv run python scripts/diagnose_data_file.py --try-empty /path/to/APKFILE/package.data
 ```
 
+When the input is directly inside `APKFILE`, the script automatically checks the
+sibling `backupHistoryInfo.xml`. A different root can be supplied with
+`--backup-dir`.
+
 For an optional local real-file test:
 
 ```bash
 SMARTSWITCH_REAL_DATA=/path/to/APKFILE/package.data uv run pytest -m real_backup -v
 ```
+
+That optional test now requires authenticated decryption and a valid TAR. It no
+longer passes merely because a missing credential was diagnosed correctly.
+
+## Application `.penc` payloads
+
+`APKFILE/<package>.penc` uses a four-byte framing header followed by an
+AES-128-CBC/PKCS#7 encrypted prefix. Smart Switch encrypts at most the first
+1 MiB of the APK and leaves the remainder unchanged. The key is the first 16
+bytes of `SHA-256(session Dummy)` and the IV is fixed by the format.
+
+The decoder only accepts the result after all of these checks pass:
+
+- ZIP magic and central directory
+- CRC for every ZIP member
+- root `AndroidManifest.xml`
+- base `classes.dex`
+
+This behavior was cross-checked against the Smart Switch packet/proof-of-concept
+implementation in `bugscale/samsung-s25-research` and the credential workflow
+published in *Forensic Science International: Digital Investigation*, DOI
+`10.1016/j.fsidi.2021.301310`.
 
 ## Galaxy Watch notes
 
