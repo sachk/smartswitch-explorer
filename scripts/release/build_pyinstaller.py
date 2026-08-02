@@ -106,6 +106,8 @@ def build(profile: str, upx_dir: str | None = None) -> None:
         "src",
         "--paths",
         "lib",
+        "--copy-metadata",
+        "smartswitch-explorer",
         "--add-data",
         f"src/gui/assets{separator}gui/assets",
         "--add-data",
