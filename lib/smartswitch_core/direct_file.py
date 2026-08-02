@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import json
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 from smartswitch_core.file_signatures import (
@@ -31,10 +32,14 @@ SECONDARY_MARKERS_FOR_SCORING: tuple[str, ...] = (
     "backupHistoryInfo.xml",
 )
 
+STAGED_BACKUP_PREFIX = "smartswitch-explorer-direct-"
+STALE_STAGE_AGE_SECONDS = 24 * 60 * 60
+
 __all__ = [
     "DirectImportPlan",
     "DirectImportPlanningResult",
     "cleanup_staged_backup_dirs",
+    "cleanup_stale_staged_backup_dirs",
     "fallback_package_from_apk_filename",
     "infer_package_from_apk_filename",
     "map_direct_file_to_item_ids",
@@ -299,19 +304,54 @@ def cleanup_staged_backup_dirs(paths: list[Path], *, keep: set[str] | None = Non
         key = path_key(directory)
         if key in keep_keys:
             continue
-        if not directory.exists():
+        if not directory.exists() or directory.is_symlink():
             continue
-        if not directory.name.startswith("smartswitch-explorer-direct-"):
+        if not directory.name.startswith(STAGED_BACKUP_PREFIX):
             continue
         try:
             shutil.rmtree(directory)
         except OSError as exc:
-            warnings.append(f"{directory}: failed to remove temporary import folder ({exc})")
+            warnings.append(f"{directory.name}: failed to remove temporary import folder ({exc.strerror or 'OS error'})")
     return warnings
 
 
-def stage_direct_files_as_backup(files: list[Path]) -> tuple[Path, list[str]]:
-    root = Path(tempfile.mkdtemp(prefix="smartswitch-explorer-direct-"))
+def cleanup_stale_staged_backup_dirs(
+    *,
+    temp_root: Path | None = None,
+    max_age_seconds: float = STALE_STAGE_AGE_SECONDS,
+    current_time: float | None = None,
+) -> list[str]:
+    if max_age_seconds < 0:
+        raise ValueError("max_age_seconds must not be negative")
+
+    root = temp_root or Path(tempfile.gettempdir())
+    try:
+        entries = list(root.iterdir())
+    except OSError:
+        return []
+
+    now = time.time() if current_time is None else current_time
+    stale: list[Path] = []
+    for entry in entries:
+        if not entry.name.startswith(STAGED_BACKUP_PREFIX) or entry.is_symlink() or not entry.is_dir():
+            continue
+        try:
+            age = now - entry.stat().st_mtime
+        except OSError:
+            continue
+        if age >= max_age_seconds:
+            stale.append(entry)
+    return cleanup_staged_backup_dirs(stale)
+
+
+def stage_direct_files_as_backup(
+    files: list[Path],
+    *,
+    temp_root: Path | None = None,
+) -> tuple[Path, list[str]]:
+    if temp_root is not None:
+        temp_root.mkdir(parents=True, exist_ok=True)
+    root = Path(tempfile.mkdtemp(prefix=STAGED_BACKUP_PREFIX, dir=temp_root))
     warnings: list[str] = []
 
     message_dir = root / "MESSAGE"
@@ -325,7 +365,7 @@ def stage_direct_files_as_backup(files: list[Path]) -> tuple[Path, list[str]]:
             json.dumps(
                 {
                     "DisplayName": "Direct File Import",
-                    "SourceFiles": [str(path) for path in files],
+                    "SourceFileCount": len(files),
                 },
                 indent=2,
             ),

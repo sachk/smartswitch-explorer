@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from smartswitch_core.direct_file import (
@@ -147,7 +148,10 @@ def test_stage_direct_files_as_backup(tmp_path: Path) -> None:
     calllog = files_dir / "CALLLOG.zip"
     calllog.write_bytes(b"zip")
 
-    staged, warnings = stage_direct_files_as_backup([sms, smem, app_data, split_apk, contacts, calllog])
+    staged, warnings = stage_direct_files_as_backup(
+        [sms, smem, app_data, split_apk, contacts, calllog],
+        temp_root=tmp_path,
+    )
 
     assert staged.exists()
     assert (staged / "MESSAGE" / "Message.smem").exists()
@@ -157,4 +161,9 @@ def test_stage_direct_files_as_backup(tmp_path: Path) -> None:
     assert any(path.name.endswith(".apk") for path in (staged / "APKFILE").iterdir())
     assert (staged / "CONTACT" / "Contact.csv").exists()
     assert (staged / "CALLLOG" / "CALLLOG.zip").exists()
+    metadata_text = (staged / "SmartSwitchBackup.json").read_text(encoding="utf-8")
+    metadata = json.loads(metadata_text)
+    assert metadata == {"DisplayName": "Direct File Import", "SourceFileCount": 6}
+    assert str(files_dir) not in metadata_text
+    assert "SourceFiles" not in metadata
     assert isinstance(warnings, list)

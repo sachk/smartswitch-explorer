@@ -35,6 +35,20 @@ def test_group_unstructured_entries_dedupes_other_by_normalized_name(tmp_path: P
     assert len(other) == 1
 
 
+def test_group_unstructured_entries_excludes_private_root_metadata(tmp_path: Path) -> None:
+    backup = tmp_path / "backup"
+    backup.mkdir()
+    for name in ("SmartSwitchBackup.json", "backupHistoryInfo.xml", "transfer.log", "EXTRA.JSON"):
+        (backup / name).write_text("private metadata", encoding="utf-8")
+    (backup / "payload.dat").write_bytes(b"payload")
+
+    storage, settings, other = group_unstructured_entries(backup)
+
+    assert not storage
+    assert not settings
+    assert {entry.name for entry in other} == {"payload.dat"}
+
+
 def test_prettify_category_name_overrides_and_fallback() -> None:
     assert prettify_category_name("DIALERSETTING") == "Dialer Settings"
     assert prettify_category_name("WIFICONFIG") == "Wi-Fi Settings"

@@ -5,15 +5,12 @@ import shutil
 import zipfile
 from pathlib import Path
 
+from smartswitch_core.category_grouping import is_private_root_metadata_name
 from smartswitch_core.crypto.common import DEFAULT_DUMMY_HEX
 from smartswitch_core.crypto.smartdecrypt import decode_iv_prefix_payload, is_probably_encrypted_name
 from smartswitch_core.export import write_manifest
 from smartswitch_core.models import ExportResult
 from smartswitch_core.path_safety import safe_output_path
-
-
-def _safe_target(root: Path, relative: str) -> Path:
-    return safe_output_path(root, relative)
 
 
 def _safe_extract_zip(zip_path: Path, destination: Path) -> tuple[int, list[str]]:
@@ -27,8 +24,8 @@ def _safe_extract_zip(zip_path: Path, destination: Path) -> tuple[int, list[str]
                 if info.is_dir():
                     continue
                 try:
-                    target = _safe_target(destination, info.filename)
-                except ValueError as exc:
+                    target = safe_output_path(destination, info.filename)
+                except ValueError:
                     warnings.append(f"Skipped unsafe zip entry in {zip_path.name}: {info.filename}")
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -53,7 +50,7 @@ def _safe_extract_zip_bytes(raw_zip: bytes, destination: Path, source_name: str)
                 if info.is_dir():
                     continue
                 try:
-                    target = _safe_target(destination, info.filename)
+                    target = safe_output_path(destination, info.filename)
                 except ValueError as exc:
                     warnings.append(f"Skipped unsafe zip entry in {source_name}: {info.filename} ({exc})")
                     continue
@@ -73,7 +70,7 @@ def _copy_tree(source: Path, destination: Path) -> tuple[int, list[str]]:
     copied = 0
     destination.mkdir(parents=True, exist_ok=True)
     for path in source.rglob("*"):
-        if not path.is_file():
+        if path.is_symlink() or not path.is_file():
             continue
         rel = path.relative_to(source)
         target = destination / rel
@@ -143,11 +140,30 @@ def export_other_entry(
     warnings: list[str] = []
     errors: list[str] = []
 
-    source = backup_dir / entry_name
+    unresolved_source = backup_dir / entry_name
+    if unresolved_source.is_symlink():
+        return ExportResult(ok=False, outputs=outputs, warnings=warnings, errors=["Symbolic links are not exportable"])
+    try:
+        source = safe_output_path(backup_dir, entry_name)
+    except ValueError:
+        return ExportResult(ok=False, outputs=outputs, warnings=warnings, errors=["Invalid top-level backup entry"])
+    if source.parent != backup_dir.resolve():
+        return ExportResult(ok=False, outputs=outputs, warnings=warnings, errors=["Invalid top-level backup entry"])
+    if is_private_root_metadata_name(entry_name):
+        return ExportResult(
+            ok=False,
+            outputs=outputs,
+            warnings=warnings,
+            errors=["Root backup metadata is intentionally excluded from export"],
+        )
     if not source.exists():
         return ExportResult(ok=False, outputs=outputs, warnings=warnings, errors=[f"Missing entry: {entry_name}"])
 
-    entry_out = out_dir / category / entry_name
+    try:
+        category_out = safe_output_path(out_dir, category)
+        entry_out = safe_output_path(category_out, entry_name)
+    except ValueError:
+        return ExportResult(ok=False, outputs=outputs, warnings=warnings, errors=["Invalid export category"])
     raw_out = entry_out / "raw"
     decoded_out = entry_out / "decoded"
     copied_files = 0
@@ -161,7 +177,7 @@ def export_other_entry(
         outputs.append(raw_out)
 
         for path in source.rglob("*"):
-            if not path.is_file():
+            if path.is_symlink() or not path.is_file():
                 continue
             rel = path.relative_to(source)
             try:
@@ -183,7 +199,7 @@ def export_other_entry(
                 outputs.append(decoded_path)
 
         for archive in source.rglob("*"):
-            if not archive.is_file():
+            if archive.is_symlink() or not archive.is_file():
                 continue
             if not zipfile.is_zipfile(archive):
                 continue
@@ -204,12 +220,16 @@ def export_other_entry(
                                 raw = zf.read(info)
                             except KeyError:
                                 continue
-                            decoded_member = info.filename.replace("\\", "/").lstrip("/")
-                            decoded_rel = archive_rel.with_suffix("") / decoded_member
+                            decoded_root = decoded_out / archive_rel.with_suffix("")
+                            try:
+                                decoded_destination = safe_output_path(decoded_root, info.filename)
+                            except ValueError:
+                                warnings.append(f"Skipped unsafe encrypted zip entry in {archive.name}: {info.filename}")
+                                continue
                             decoded_path, nested_count, local_warnings = _decode_and_write_if_encrypted(
                                 raw,
                                 name_hint=Path(info.filename).name,
-                                destination=decoded_out / decoded_rel,
+                                destination=decoded_destination,
                                 dummy_hex=dummy_hex,
                                 backup_password=backup_password,
                             )
@@ -265,10 +285,15 @@ def export_other_entry(
                                 raw = zf.read(info)
                             except KeyError:
                                 continue
+                            try:
+                                decoded_destination = safe_output_path(decoded_out / source.stem, info.filename)
+                            except ValueError:
+                                warnings.append(f"Skipped unsafe encrypted zip entry in {source.name}: {info.filename}")
+                                continue
                             decoded_path, nested_count, local_warnings = _decode_and_write_if_encrypted(
                                 raw,
                                 name_hint=Path(info.filename).name,
-                                destination=decoded_out / source.stem / info.filename.replace("\\", "/").lstrip("/"),
+                                destination=decoded_destination,
                                 dummy_hex=dummy_hex,
                                 backup_password=backup_password,
                             )
@@ -284,7 +309,7 @@ def export_other_entry(
 
     manifest = {
         "entry": entry_name,
-        "source": str(source),
+        "source_entry": source.name,
         "copied_files": copied_files,
         "extracted_archives": extracted_archives,
         "decoded_files": decoded_files,

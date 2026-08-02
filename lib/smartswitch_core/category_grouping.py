@@ -144,6 +144,12 @@ _STORAGE_NORMALIZED = {_normalize(name) for name in STORAGE_TOP_LEVEL}
 _SETTINGS_NORMALIZED = {_normalize(name) for name in SETTINGS_TOP_LEVEL}
 _METADATA_STORAGE_NORMALIZED = {_normalize(name) for name in _METADATA_STORAGE_TYPES}
 _METADATA_SETTINGS_NORMALIZED = {_normalize(name) for name in _METADATA_SETTINGS_TYPES}
+PRIVATE_ROOT_METADATA_SUFFIXES = frozenset({".json", ".xml", ".log"})
+
+
+def is_private_root_metadata_name(name: str) -> bool:
+    path = Path(name)
+    return path.name == name and path.suffix.casefold() in PRIVATE_ROOT_METADATA_SUFFIXES
 
 
 def _split_identifier(name: str) -> list[str]:
@@ -236,6 +242,8 @@ def group_unstructured_entries(backup_dir: Path) -> tuple[list[GroupedEntry], li
     for entry in entries:
         name = entry.name
         normalized = _normalize(name)
+        if entry.is_symlink() or (entry.is_file() and is_private_root_metadata_name(name)):
+            continue
         if normalized in core_norms or normalized in media_norms:
             continue
 

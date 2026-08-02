@@ -16,6 +16,7 @@ from smartswitch_core.additional_export import (
 from smartswitch_core.applications.decrypt_extract import copy_app_apk_payload, decrypt_extract_app
 from smartswitch_core.direct_file import (
     cleanup_staged_backup_dirs,
+    cleanup_stale_staged_backup_dirs,
     map_direct_file_to_item_ids,
     path_key,
     plan_direct_import,
@@ -52,6 +53,7 @@ def _render_issue_lines(lines: list[str], *, limit: int = 10) -> str:
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
+        cleanup_stale_staged_backup_dirs()
         self.setWindowTitle(tr("MainWindow", "SmartSwitch Explorer"))
         self.resize(QSize(500, 720))
 

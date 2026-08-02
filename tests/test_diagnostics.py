@@ -7,23 +7,27 @@ from gui.diagnostics import anonymize_diagnostic_text, build_anonymized_report, 
 
 def test_anonymize_diagnostic_text_removes_personal_identifiers() -> None:
     source = (
-        r"Failed for com.tozelabs.tvshowtime at C:\Users\artho\Backup\file.data "
-        "/home/artho/export artho@example.com IMEI 123456789012345 "
+        "Failed for com.example.private\n"
+        "Windows path: " r"C:\Users\Example Person\Backup\file.data" "\n"
+        "UNC path: " r"\\server\share\Example Person\Backup\file.data" "\n"
+        "POSIX path: /home/example person/export/file.data\n"
+        "Contact person@example.com IMEI 123456789012345 "
         "key AABBCCDDEEFF00112233445566778899"
     )
 
     sanitized = anonymize_diagnostic_text(source)
 
     for secret in (
-        "com.tozelabs.tvshowtime",
-        "artho",
-        "artho@example.com",
+        "com.example.private",
+        "Example Person",
+        "person@example.com",
+        "server",
         "123456789012345",
         "AABBCCDDEEFF00112233445566778899",
     ):
         assert secret not in sanitized
     assert "<package-id>" in sanitized
-    assert sanitized.count("<path>") == 2
+    assert sanitized.count("<path>") == 3
     assert "<email>" in sanitized
     assert "<number>" in sanitized
     assert "<redacted-hex>" in sanitized
@@ -49,6 +53,12 @@ def test_issue_url_contains_only_anonymized_report() -> None:
     assert "com.example.private" not in issue_url
     assert "person@example.com" not in issue_url
     assert "No backup files or backup metadata are included." in body
+
+
+def test_anonymize_diagnostic_text_does_not_treat_https_url_as_posix_path() -> None:
+    source = "Documentation: https://example.com/help"
+
+    assert anonymize_diagnostic_text(source) == source
 
 
 def test_issue_url_truncates_oversized_reports() -> None:
