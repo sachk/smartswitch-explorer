@@ -9,15 +9,11 @@ from smartswitch_core.crypto.common import DEFAULT_DUMMY_HEX
 from smartswitch_core.crypto.smartdecrypt import decode_iv_prefix_payload, is_probably_encrypted_name
 from smartswitch_core.export import write_manifest
 from smartswitch_core.models import ExportResult
+from smartswitch_core.path_safety import safe_output_path
 
 
 def _safe_target(root: Path, relative: str) -> Path:
-    cleaned = relative.replace("\\", "/").lstrip("/")
-    candidate = (root / cleaned).resolve()
-    root_resolved = root.resolve()
-    if not str(candidate).startswith(str(root_resolved)):
-        raise ValueError("Unsafe output path")
-    return candidate
+    return safe_output_path(root, relative)
 
 
 def _safe_extract_zip(zip_path: Path, destination: Path) -> tuple[int, list[str]]:

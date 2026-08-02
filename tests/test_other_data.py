@@ -133,7 +133,7 @@ def test_export_other_entry_decodes_encrypted_zip_member(tmp_path: Path) -> None
     alarm_dir.mkdir(parents=True)
     encrypted_xml = _encrypt_ivprefix(b"<?xml version='1.0'?><Alarm><Item id='1'/></Alarm>")
     with zipfile.ZipFile(alarm_dir / "ALARM.zip", mode="w") as zf:
-        zf.writestr("/alarm.exml", encrypted_xml)
+        zf.writestr("alarm.exml", encrypted_xml)
 
     out = tmp_path / "out"
     result = export_other_entry(backup, "ALARM", out)
@@ -168,3 +168,18 @@ def test_export_secure_folder_entry_with_backup_password(tmp_path: Path) -> None
     decoded = out / "other_data" / "SECUREFOLDER" / "decoded" / "private.xml"
     assert decoded.exists()
     assert "<SecureFolder>" in decoded.read_text(encoding="utf-8")
+
+
+def test_export_other_entry_rejects_absolute_zip_member(tmp_path: Path) -> None:
+    backup = tmp_path / "backup"
+    alarm_dir = backup / "ALARM"
+    alarm_dir.mkdir(parents=True)
+    with zipfile.ZipFile(alarm_dir / "ALARM.zip", mode="w") as zf:
+        zf.writestr("/escape.txt", b"nope")
+
+    out = tmp_path / "out"
+    result = export_other_entry(backup, "ALARM", out)
+
+    assert result.ok
+    assert not (out / "escape.txt").exists()
+    assert any("unsafe zip entry" in warning for warning in result.warnings)
