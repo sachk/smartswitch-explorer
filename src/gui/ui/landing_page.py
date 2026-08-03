@@ -9,6 +9,7 @@ from pathlib import Path
 from PySide6.QtCore import QSize, Qt, Signal, QThreadPool
 from PySide6.QtGui import QFont, QPixmap
 from PySide6.QtWidgets import (
+    QFileDialog,
     QFrame,
     QGroupBox,
     QGridLayout,

@@ -5,6 +5,7 @@ from pathlib import Path
 from PySide6.QtWidgets import QFileDialog
 
 from gui.ui import file_dialogs
+from gui.ui import landing_page
 
 
 class _FakeFileDialog:
@@ -76,3 +77,19 @@ def test_select_existing_directory_returns_none_when_cancelled(monkeypatch) -> N
     monkeypatch.setattr(file_dialogs, "QFileDialog", _FakeFileDialog)
 
     assert file_dialogs.select_existing_directory(None, "Pick folder") is None  # type: ignore[arg-type]
+
+
+def test_landing_page_open_file_dialog_can_be_cancelled(monkeypatch) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    class _FakeOpenFileDialog:
+        @staticmethod
+        def getOpenFileNames(*args: object) -> tuple[list[str], str]:
+            calls.append(args)
+            return [], ""
+
+    monkeypatch.setattr(landing_page, "QFileDialog", _FakeOpenFileDialog)
+
+    landing_page.LandingPage._open_file_dialog(object())  # type: ignore[arg-type]
+
+    assert len(calls) == 1
