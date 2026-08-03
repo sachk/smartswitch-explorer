@@ -23,8 +23,11 @@ def safe_relative_parts(relative: str) -> tuple[str, ...]:
 
 
 def safe_output_path(root: Path, relative: str) -> Path:
-    root_resolved = root.resolve(strict=False)
-    candidate = root_resolved.joinpath(*safe_relative_parts(relative)).resolve(strict=False)
+    try:
+        root_resolved = root.resolve(strict=False)
+        candidate = root_resolved.joinpath(*safe_relative_parts(relative)).resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("Output path could not be resolved safely") from exc
     try:
         candidate.relative_to(root_resolved)
     except ValueError as exc:

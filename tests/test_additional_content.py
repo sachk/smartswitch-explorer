@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import zipfile
 from pathlib import Path
 
@@ -84,6 +85,10 @@ def test_export_media_watch_and_contacts(tmp_path: Path) -> None:
     assert (out / "media" / "videos" / "Video" / "video2.mp4").exists()
     assert (out / "galaxy_watch" / "current" / "watch1.encp").exists()
     assert (out / "contacts" / "csv" / "Contact.csv").exists()
+    watch_manifest_path = out / "galaxy_watch" / "manifest_current.json"
+    watch_manifest_text = watch_manifest_path.read_text(encoding="utf-8")
+    assert json.loads(watch_manifest_text)["source"] == "GALAXYWATCH_CURRENT"
+    assert str(backup) not in watch_manifest_text
 
 
 def test_export_calllog_to_csv(tmp_path: Path) -> None:

@@ -25,12 +25,12 @@ def _copy_tree(source_dir: Path, destination_dir: Path) -> tuple[int, list[Path]
     warnings: list[str] = []
     copied = 0
 
-    if not source_dir.is_dir():
-        return copied, outputs, [f"Missing directory: {source_dir}"]
+    if source_dir.is_symlink() or not source_dir.is_dir():
+        return copied, outputs, [f"Missing or unsafe directory: {source_dir.name}"]
 
     destination_dir.mkdir(parents=True, exist_ok=True)
     for source in source_dir.rglob("*"):
-        if not source.is_file():
+        if source.is_symlink() or not source.is_file():
             continue
         relative = source.relative_to(source_dir)
         target = destination_dir / relative
@@ -44,10 +44,6 @@ def _copy_tree(source_dir: Path, destination_dir: Path) -> tuple[int, list[Path]
     return copied, outputs, warnings
 
 
-def _safe_target(root: Path, relative: str) -> Path:
-    return safe_output_path(root, relative)
-
-
 def _extract_zip_bytes(raw_zip: bytes, destination: Path) -> tuple[int, list[str]]:
     warnings: list[str] = []
     extracted = 0
@@ -58,7 +54,7 @@ def _extract_zip_bytes(raw_zip: bytes, destination: Path) -> tuple[int, list[str
                 if info.is_dir():
                     continue
                 try:
-                    target = _safe_target(destination, info.filename)
+                    target = safe_output_path(destination, info.filename)
                 except ValueError as exc:
                     warnings.append(f"Skipped unsafe nested zip path {info.filename}: {exc}")
                     continue
@@ -98,13 +94,13 @@ def _decoded_watch_target_path(decoded_root: Path, source_name: str, mapped_path
         relative = Path(candidate)
         if not relative.suffix and extension:
             relative = relative.with_suffix(extension)
-        return _safe_target(decoded_root, relative.as_posix())
+        return safe_output_path(decoded_root, relative.as_posix())
 
     base_name = source_name[:-4] if source_name.endswith("encp") else source_name
     relative = Path(base_name)
     if not relative.suffix and extension:
         relative = relative.with_suffix(extension)
-    return _safe_target(decoded_root, relative.as_posix())
+    return safe_output_path(decoded_root, relative.as_posix())
 
 
 def export_media_directory(kind: str, backup_dir: Path, out_dir: Path) -> ExportResult:
@@ -174,7 +170,7 @@ def export_watch_backup(
     unresolved: list[str] = []
 
     for source in sorted(source_dir.glob("*encp")):
-        if not source.is_file():
+        if source.is_symlink() or not source.is_file():
             continue
         try:
             decoded = decode_iv_prefix_payload(
@@ -215,7 +211,7 @@ def export_watch_backup(
 
     manifest = {
         "kind": kind,
-        "source": str(source_dir),
+        "source": source_name,
         "copied_files": copied,
         "decoded_files": decoded_count,
         "decoded_nested_zip_entries": extracted_nested,

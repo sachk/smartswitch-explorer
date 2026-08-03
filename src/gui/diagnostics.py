@@ -4,13 +4,12 @@ import platform
 import re
 from urllib.parse import urlencode
 
+from smartswitch_core.privacy import redact_absolute_paths
 from gui.version import get_app_version
 
 ISSUE_NEW_URL = "https://github.com/sachk/smartswitch-explorer/issues/new"
 
 _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
-_WINDOWS_PATH_RE = re.compile(r"\b[A-Z]:[\\/](?:[^\s:]+[\\/]?)+", re.IGNORECASE)
-_POSIX_PATH_RE = re.compile(r"(?<![\w.])/(?:[^\s/:]+/)*[^\s:]*")
 _PACKAGE_ID_RE = re.compile(r"\b(?:[a-zA-Z][\w]*\.){2,}[a-zA-Z][\w]*\b")
 _LONG_NUMBER_RE = re.compile(r"\b\d{12,}\b")
 _HEX_SECRET_RE = re.compile(r"\b[0-9A-Fa-f]{32,}\b")
@@ -18,11 +17,10 @@ _HEX_SECRET_RE = re.compile(r"\b[0-9A-Fa-f]{32,}\b")
 
 def anonymize_diagnostic_text(text: str) -> str:
     sanitized = _EMAIL_RE.sub("<email>", str(text))
-    sanitized = _WINDOWS_PATH_RE.sub("<path>", sanitized)
-    sanitized = _POSIX_PATH_RE.sub("<path>", sanitized)
     sanitized = _PACKAGE_ID_RE.sub("<package-id>", sanitized)
     sanitized = _LONG_NUMBER_RE.sub("<number>", sanitized)
-    return _HEX_SECRET_RE.sub("<redacted-hex>", sanitized)
+    sanitized = _HEX_SECRET_RE.sub("<redacted-hex>", sanitized)
+    return redact_absolute_paths(sanitized)
 
 
 def build_anonymized_report(errors: list[object], warnings: list[object]) -> str:

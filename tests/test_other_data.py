@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import hashlib
-
+import json
 import zipfile
 from pathlib import Path
 
+import pytest
 from Crypto.Cipher import AES
 
 from smartswitch_core.crypto.common import DEFAULT_DUMMY_HEX, derive_dummy_key
@@ -47,7 +48,7 @@ def test_scanner_adds_other_backup_data_root(tmp_path: Path) -> None:
     other = next(root for root in inventory.roots if root.label == "Other Backup Data")
     child_names = {child.package_id for child in other.children}
     assert "ALARM" in child_names
-    assert "ReqItemsInfo.json" in child_names
+    assert "ReqItemsInfo.json" not in child_names
 
 
 def test_scanner_moves_storage_and_settings_out_of_other(tmp_path: Path) -> None:
@@ -92,6 +93,12 @@ def test_export_other_directory_copies_and_extracts_zip(tmp_path: Path) -> None:
     assert result.ok
     assert (out / "other_data" / "ALARM" / "raw" / "ALARM.zip").exists()
     assert (out / "other_data" / "ALARM" / "extracted" / "ALARM" / "alarm" / "data.txt").exists()
+    manifest_path = out / "other_data" / "ALARM" / "manifest.json"
+    manifest_text = manifest_path.read_text(encoding="utf-8")
+    manifest = json.loads(manifest_text)
+    assert manifest["source_entry"] == "ALARM"
+    assert "source" not in manifest
+    assert str(backup) not in manifest_text
 
 
 def test_export_other_file_copies_and_extracts_zip(tmp_path: Path) -> None:
@@ -142,6 +149,56 @@ def test_export_other_entry_decodes_encrypted_zip_member(tmp_path: Path) -> None
     decoded = out / "other_data" / "ALARM" / "decoded" / "ALARM" / "alarm.xml"
     assert decoded.exists()
     assert "<Alarm>" in decoded.read_text(encoding="utf-8")
+
+
+def test_export_other_entry_rejects_private_root_metadata(tmp_path: Path) -> None:
+    backup = tmp_path / "backup"
+    backup.mkdir()
+    (backup / "SmartSwitchBackup.json").write_text('{"IMEI":"000000000000000"}', encoding="utf-8")
+
+    result = export_other_entry(backup, "SmartSwitchBackup.json", tmp_path / "out")
+
+    assert not result.ok
+    assert "intentionally excluded" in result.errors[0]
+    assert not (tmp_path / "out" / "other_data" / "SmartSwitchBackup.json").exists()
+
+
+def test_export_other_entry_rejects_top_level_symlink(tmp_path: Path) -> None:
+    backup = tmp_path / "backup"
+    backup.mkdir()
+    private = tmp_path / "private"
+    private.mkdir()
+    (private / "secret.txt").write_text("secret", encoding="utf-8")
+    try:
+        (backup / "LINKED").symlink_to(private, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"Symlinks are unavailable: {exc}")
+
+    result = export_other_entry(backup, "LINKED", tmp_path / "out")
+
+    assert not result.ok
+    assert "Symbolic links" in result.errors[0]
+    assert not (tmp_path / "out" / "other_data" / "LINKED").exists()
+
+
+def test_export_other_zip_rejects_absolute_and_traversal_entries(tmp_path: Path) -> None:
+    backup = tmp_path / "backup"
+    backup.mkdir()
+    archive = backup / "OTHER.zip"
+    with zipfile.ZipFile(archive, mode="w") as zf:
+        zf.writestr("safe/file.txt", b"safe")
+        zf.writestr("../escaped.txt", b"unsafe")
+        zf.writestr("/absolute.txt", b"unsafe")
+
+    out = tmp_path / "out"
+    result = export_other_entry(backup, "OTHER.zip", out)
+
+    assert result.ok
+    extracted = out / "other_data" / "OTHER.zip" / "extracted" / "OTHER"
+    assert (extracted / "safe" / "file.txt").read_bytes() == b"safe"
+    assert not (out / "other_data" / "OTHER.zip" / "extracted" / "escaped.txt").exists()
+    assert not (tmp_path / "escaped.txt").exists()
+    assert any("unsafe zip entry" in warning for warning in result.warnings)
 
 
 def test_export_secure_folder_entry_with_backup_password(tmp_path: Path) -> None:

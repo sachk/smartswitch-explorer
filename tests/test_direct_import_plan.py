@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -143,3 +144,27 @@ def test_cleanup_staged_backup_dirs_only_removes_staged_prefix(tmp_path: Path) -
     assert not staged.exists()
     assert regular.exists()
     assert kept_staged.exists()
+
+
+def test_cleanup_stale_staged_backup_dirs_preserves_recent_workspaces(tmp_path: Path) -> None:
+    old = tmp_path / "smartswitch-explorer-direct-old"
+    recent = tmp_path / "smartswitch-explorer-direct-recent"
+    unrelated = tmp_path / "other-old-directory"
+    for directory in (old, recent, unrelated):
+        directory.mkdir()
+
+    now = 2_000_000.0
+    os.utime(old, (now - 7200, now - 7200))
+    os.utime(recent, (now - 60, now - 60))
+    os.utime(unrelated, (now - 7200, now - 7200))
+
+    warnings = direct_file.cleanup_stale_staged_backup_dirs(
+        temp_root=tmp_path,
+        max_age_seconds=3600,
+        current_time=now,
+    )
+
+    assert warnings == []
+    assert not old.exists()
+    assert recent.exists()
+    assert unrelated.exists()
