@@ -1,23 +1,36 @@
 from __future__ import annotations
 
-import hashlib
 import io
 import json
 import shutil
+import stat
 import string
-import struct
 import tarfile
-import xml.etree.ElementTree as ET
 import zipfile
-import zlib
 from pathlib import Path
 
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
 
-from smartswitch_core.crypto.common import DEFAULT_DUMMY_HEX, DEFAULT_PENC_IV, derive_dummy_key
+from smartswitch_core.applications.android_backup import (
+    UNAVAILABLE_CREDENTIAL_MESSAGE,
+    AndroidBackupDecodeError,
+    decode_android_backup_file,
+)
+from smartswitch_core.archive_safety import ArchiveBudget, ArchiveLimitError
+from smartswitch_core.crypto.common import (
+    DEFAULT_DUMMY_HEX,
+    DEFAULT_PENC_IV,
+    derive_dummy_key,
+)
+from smartswitch_core.crypto.session_credentials import (
+    SessionCredential,
+    SessionCredentialError,
+    load_session_credential,
+)
 from smartswitch_core.export import write_manifest
 from smartswitch_core.models import ExportResult
+from smartswitch_core.path_safety import safe_output_path
 
 
 class AppDataPasswordError(ValueError):
@@ -26,6 +39,14 @@ class AppDataPasswordError(ValueError):
 
 class AppApkDecryptionError(ValueError):
     """The legacy Smart Switch APK key did not decrypt a PENC payload."""
+
+
+_PENC_ENCRYPTED_PREFIX_BYTES = 1024 * 1024
+_CREDENTIAL_FAILURE_PHASES = {
+    "master-key padding failure",
+    "malformed master-key structure",
+    "master-key checksum mismatch",
+}
 
 _PASSWORD_FIELD_NAMES = {
     "backuppassword",
@@ -49,8 +70,14 @@ def _metadata_password_candidates(backup_dir: Path) -> list[tuple[str, str]]:
         def visit(value: object) -> None:
             if isinstance(value, dict):
                 for key, child in value.items():
-                    normalized = "".join(char for char in str(key).lower() if char.isalnum())
-                    if normalized in _PASSWORD_FIELD_NAMES and isinstance(child, str) and child:
+                    normalized = "".join(
+                        char for char in str(key).lower() if char.isalnum()
+                    )
+                    if (
+                        normalized in _PASSWORD_FIELD_NAMES
+                        and isinstance(child, str)
+                        and child
+                    ):
                         source = f"{metadata_path.name}:{key}"
                         if normalized == "dummy" and len(child) == 64:
                             try:
@@ -59,7 +86,9 @@ def _metadata_password_candidates(backup_dir: Path) -> list[tuple[str, str]]:
                                 pass
                             else:
                                 if all(char in string.printable for char in decoded):
-                                    candidates.append((f"{source} (hex decoded)", decoded))
+                                    candidates.append(
+                                        (f"{source} (hex decoded)", decoded)
+                                    )
                         candidates.append((source, child))
                     visit(child)
             elif isinstance(value, list):
@@ -67,29 +96,43 @@ def _metadata_password_candidates(backup_dir: Path) -> list[tuple[str, str]]:
                     visit(child)
 
         visit(metadata)
-
-    history_path = backup_dir / "backupHistoryInfo.xml"
-    if history_path.exists():
-        try:
-            root = ET.fromstring(history_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, ET.ParseError):
-            root = None
-        if root is not None:
-            for element in root.iter():
-                if element.tag.rsplit("}", 1)[-1].lower() == "dummy" and element.text:
-                    candidates.append((f"{history_path.name}:Dummy", element.text.strip()))
-                    break
     return candidates
 
-def _safe_join(root: Path, relative_name: str) -> Path:
-    safe_rel = Path(relative_name.replace("\\", "/")).as_posix().lstrip("/")
-    candidate = (root / safe_rel).resolve()
-    root_resolved = root.resolve()
+
+def _application_credential_candidates(
+    backup_dir: Path,
+    *,
+    supplied_password: str | None,
+    fallback_password: str,
+    include_empty: bool = False,
+) -> list[SessionCredential]:
+    candidates: list[SessionCredential] = []
+    if supplied_password is not None:
+        candidates.append(SessionCredential(supplied_password, "Export Options"))
     try:
-        candidate.relative_to(root_resolved)
-    except ValueError as exc:
-        raise ValueError("Unsafe output path") from exc
-    return candidate
+        candidates.append(load_session_credential(backup_dir))
+    except SessionCredentialError:
+        pass
+    candidates.extend(
+        SessionCredential(value, source)
+        for source, value in _metadata_password_candidates(backup_dir)
+    )
+    candidates.append(SessionCredential(fallback_password, "Smart Switch legacy key"))
+    if include_empty:
+        candidates.append(SessionCredential("", "empty password"))
+
+    deduplicated: list[SessionCredential] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate.value in seen:
+            continue
+        seen.add(candidate.value)
+        deduplicated.append(candidate)
+    return deduplicated
+
+
+def _safe_join(root: Path, relative_name: str) -> Path:
+    return safe_output_path(root, relative_name)
 
 
 def _decrypt_penc(path: Path, dummy: str) -> bytes:
@@ -98,23 +141,74 @@ def _decrypt_penc(path: Path, dummy: str) -> bytes:
         raise ValueError(".penc file too small")
 
     encrypted_size = int.from_bytes(raw[:4], "big")
-    if encrypted_size <= 0 or encrypted_size > 0x100010:
+    if (
+        encrypted_size <= 0
+        or encrypted_size > _PENC_ENCRYPTED_PREFIX_BYTES + AES.block_size
+    ):
         raise ValueError(f"Invalid .penc encrypted segment size: {encrypted_size}")
     encrypted_end = 4 + encrypted_size
-    if encrypted_end > len(raw) or encrypted_size % 16:
+    if encrypted_end > len(raw) or encrypted_size % AES.block_size:
         raise ValueError("Truncated or unaligned .penc encrypted segment")
 
     encrypted = raw[4:encrypted_end]
-    decrypted = AES.new(derive_dummy_key(dummy), AES.MODE_CBC, DEFAULT_PENC_IV).decrypt(encrypted)
+    decrypted = AES.new(derive_dummy_key(dummy), AES.MODE_CBC, DEFAULT_PENC_IV).decrypt(
+        encrypted
+    )
     try:
-        decrypted = unpad(decrypted, 16)
+        prefix = unpad(decrypted, AES.block_size)
     except ValueError as exc:
-        raise AppApkDecryptionError("Smart Switch backup dummy key was rejected") from exc
-
-    apk = decrypted + raw[encrypted_end:]
-    if not apk.startswith(b"PK\x03\x04"):
+        raise AppApkDecryptionError(
+            "Smart Switch backup dummy key was rejected"
+        ) from exc
+    suffix = raw[encrypted_end:]
+    if suffix and len(prefix) != _PENC_ENCRYPTED_PREFIX_BYTES:
         raise AppApkDecryptionError("Smart Switch backup dummy key was rejected")
+
+    apk = prefix + suffix
+    try:
+        _validate_apk(apk)
+    except ValueError as exc:
+        raise AppApkDecryptionError(
+            "Smart Switch backup dummy key was rejected"
+        ) from exc
     return apk
+
+
+def _validate_zip_members(members: list[zipfile.ZipInfo]) -> ArchiveBudget:
+    budget = ArchiveBudget()
+    for member in members:
+        budget.add(member.file_size if not member.is_dir() else 0)
+    return budget
+
+
+def _validate_apk(data: bytes) -> dict[str, object]:
+    if not data.startswith(b"PK\x03\x04"):
+        raise ValueError("Decrypted .penc does not have ZIP magic")
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            members = archive.infolist()
+            _validate_zip_members(members)
+            names = {member.filename for member in members}
+            if archive.testzip() is not None:
+                raise ValueError("Decrypted APK failed a ZIP CRC check")
+    except (ArchiveLimitError, OSError, RuntimeError, zipfile.BadZipFile) as exc:
+        raise ValueError(f"Decrypted .penc archive was rejected: {exc}") from exc
+
+    if "AndroidManifest.xml" not in names:
+        raise ValueError("Decrypted ZIP is missing AndroidManifest.xml")
+    dex_files = sorted(
+        name
+        for name in names
+        if name == "classes.dex" or name.startswith("classes") and name.endswith(".dex")
+    )
+    if "classes.dex" not in dex_files:
+        raise ValueError("Decrypted APK is missing classes.dex")
+    return {
+        "zip_entries": len(names),
+        "zip_crc": "valid",
+        "android_manifest": True,
+        "dex_files": len(dex_files),
+    }
 
 
 def _decode_penc_with_candidates(
@@ -124,31 +218,22 @@ def _decode_penc_with_candidates(
     supplied_password: str | None,
     fallback_password: str,
 ) -> tuple[bytes, str]:
-    candidates = _metadata_password_candidates(backup_dir)
-    if supplied_password is not None:
-        candidates.insert(0, ("Export Options", supplied_password))
-    candidates.append(("legacy Smart Switch key", fallback_password))
-
-    seen: set[str] = set()
-    for source, password in candidates:
-        if password in seen:
-            continue
-        seen.add(password)
+    candidates = _application_credential_candidates(
+        backup_dir,
+        supplied_password=supplied_password,
+        fallback_password=fallback_password,
+    )
+    for candidate in candidates:
         try:
-            return _decrypt_penc(path, password), source
+            return _decrypt_penc(path, candidate.value), candidate.source
         except AppApkDecryptionError:
             continue
 
-    missing_metadata = not (backup_dir / "SmartSwitchBackup.json").exists()
-    reason = (
-        "SmartSwitchBackup.json is missing from this backup copy. "
-        if missing_metadata
-        else ""
-    )
     raise AppApkDecryptionError(
-        f"{reason}None of the available Smart Switch backup dummy keys could decrypt "
-        "the PENC header. Export Application APKs to preserve the raw PENC file."
+        "None of the available Smart Switch credentials produced a valid APK. "
+        "Export Application APKs to preserve the raw PENC file."
     )
+
 
 def _extract_recoverable_penc_entries(
     path: Path,
@@ -165,11 +250,20 @@ def _extract_recoverable_penc_entries(
         return 0, 0, [f"PENC recovery could not read the APK directory: {exc}"]
 
     with archive:
-        for member in archive.infolist():
+        members = archive.infolist()
+        try:
+            _validate_zip_members(members)
+        except ArchiveLimitError as exc:
+            file_count = sum(not member.is_dir() for member in members)
+            return 0, file_count, [f"PENC recovery refused an oversized archive: {exc}"]
+        for member in members:
             if member.is_dir():
                 continue
             target: Path | None = None
             try:
+                member_type = stat.S_IFMT(member.external_attr >> 16)
+                if member_type and member_type != stat.S_IFREG:
+                    raise ValueError("Unsupported ZIP member type")
                 target = _safe_join(out_dir, member.filename)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with archive.open(member) as source, target.open("wb") as destination:
@@ -192,68 +286,48 @@ def _extract_recoverable_penc_entries(
     return recovered, failed, warnings
 
 
-
 def _extract_local_entries(data: bytes, out_dir: Path) -> tuple[int, int, list[str]]:
     out_dir.mkdir(parents=True, exist_ok=True)
     extracted = 0
     skipped = 0
     warnings: list[str] = []
 
-    offset = 0
-    while offset + 30 <= len(data) and data[offset : offset + 4] == b"PK\x03\x04":
-        (
-            _sig,
-            _ver,
-            _flag,
-            method,
-            _mtime,
-            _mdate,
-            _crc,
-            compressed_size,
-            _uncompressed_size,
-            file_name_len,
-            extra_len,
-        ) = struct.unpack("<IHHHHHIIIHH", data[offset : offset + 30])
-
-        name_start = offset + 30
-        name_end = name_start + file_name_len
-        data_start = name_end + extra_len
-        data_end = data_start + compressed_size
-
-        if data_end > len(data) or data_end <= offset:
-            warnings.append("Truncated local entry encountered")
-            break
-
-        name = data[name_start:name_end].decode("utf-8", "replace")
-        blob = data[data_start:data_end]
-
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        members = archive.infolist()
         try:
-            target = _safe_join(out_dir, name)
-            target.parent.mkdir(parents=True, exist_ok=True)
-
-            if method == 0:
-                target.write_bytes(blob)
-                extracted += 1
-            elif method == 8:
-                try:
-                    target.write_bytes(zlib.decompress(blob, -15))
-                    extracted += 1
-                except zlib.error:
+            _validate_zip_members(members)
+        except ArchiveLimitError as exc:
+            file_count = sum(not member.is_dir() for member in members)
+            return (
+                0,
+                file_count,
+                [f"Refused to extract an oversized ZIP archive: {exc}"],
+            )
+        for info in members:
+            try:
+                target = _safe_join(out_dir, info.filename)
+                if info.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                member_type = stat.S_IFMT(info.external_attr >> 16)
+                if member_type and member_type != stat.S_IFREG:
                     skipped += 1
-                    warnings.append(f"Failed to inflate: {name}")
-            else:
+                    warnings.append("Skipped unsupported ZIP member type")
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(info) as source, target.open("wb") as handle:
+                    shutil.copyfileobj(source, handle)
+                extracted += 1
+            except (OSError, RuntimeError, ValueError, zipfile.BadZipFile):
                 skipped += 1
-                warnings.append(f"Unsupported compression method {method}: {name}")
-        except (OSError, ValueError) as exc:
-            skipped += 1
-            warnings.append(f"Failed to write {name}: {exc}")
-
-        offset = data_end
+                warnings.append("Failed to extract a ZIP member")
 
     return extracted, skipped, warnings
 
 
-def _split_android_backup_header(raw: bytes, n_lines: int = 9) -> tuple[list[bytes], int]:
+def _split_android_backup_header(
+    raw: bytes, n_lines: int = 9
+) -> tuple[list[bytes], int]:
     lines: list[bytes] = []
     pos = 0
     for _ in range(n_lines):
@@ -266,71 +340,7 @@ def _split_android_backup_header(raw: bytes, n_lines: int = 9) -> tuple[list[byt
 
 
 def _decode_data_payload(path: Path, password: str) -> tuple[bytes, dict]:
-    raw = path.read_bytes()
-    lines, payload_offset = _split_android_backup_header(raw)
-    if lines[0] != b"ANDROID BACKUP":
-        raise ValueError("Not an Android backup data file")
-
-    try:
-        version = lines[1].decode("ascii")
-        compressed = int(lines[2].decode("ascii"))
-        algorithm = lines[3].decode("ascii")
-        user_salt = bytes.fromhex(lines[4].decode("ascii"))
-        rounds = int(lines[6].decode("ascii"))
-        user_iv = bytes.fromhex(lines[7].decode("ascii"))
-        mk_blob = bytes.fromhex(lines[8].decode("ascii"))
-    except (UnicodeDecodeError, ValueError) as exc:
-        raise ValueError(f"Invalid Android backup header: {exc}") from exc
-
-    if algorithm != "AES-256":
-        raise ValueError(f"Unsupported Android backup encryption algorithm: {algorithm}")
-    if len(user_iv) != 16 or not mk_blob or len(mk_blob) % 16:
-        raise ValueError("Invalid encrypted Android backup key")
-
-    user_key = hashlib.pbkdf2_hmac(
-        "sha1", password.encode("utf-8"), user_salt, rounds, dklen=32
-    )
-    try:
-        unwrapped = unpad(AES.new(user_key, AES.MODE_CBC, user_iv).decrypt(mk_blob), 16)
-    except ValueError as exc:
-        raise AppDataPasswordError("Android backup password was rejected") from exc
-
-    try:
-        iv_len = unwrapped[0]
-        cursor = 1
-        mk_iv = unwrapped[cursor : cursor + iv_len]
-        cursor += iv_len
-        mk_len = unwrapped[cursor]
-        cursor += 1
-        mk = unwrapped[cursor : cursor + mk_len]
-    except IndexError as exc:
-        raise ValueError("Invalid decrypted Android backup key") from exc
-    if len(mk_iv) != iv_len or len(mk) != mk_len or len(mk_iv) != 16:
-        raise ValueError("Invalid decrypted Android backup key")
-
-    payload_enc = raw[payload_offset:]
-    if not payload_enc:
-        payload = b""
-    else:
-        if len(payload_enc) % 16:
-            raise ValueError("Encrypted Android backup payload is not AES aligned")
-        try:
-            payload = unpad(AES.new(mk, AES.MODE_CBC, mk_iv).decrypt(payload_enc), 16)
-        except ValueError as exc:
-            raise ValueError("Android backup payload is damaged or uses an unsupported format") from exc
-        if compressed:
-            try:
-                payload = zlib.decompress(payload)
-            except zlib.error as exc:
-                raise ValueError(f"Invalid compressed Android backup payload: {exc}") from exc
-
-    meta = {
-        "version": version,
-        "compressed": compressed,
-        "algorithm": algorithm,
-        "payload_len": len(payload),
-    }
-    return payload, meta
+    return decode_android_backup_file(path, password)
 
 
 def _decode_data_with_candidates(
@@ -340,43 +350,28 @@ def _decode_data_with_candidates(
     supplied_password: str | None,
     fallback_password: str,
 ) -> tuple[bytes, dict]:
-    candidates: list[tuple[str, str]] = []
-    if supplied_password is not None:
-        candidates.append(("Export Options", supplied_password))
-    candidates.extend(_metadata_password_candidates(backup_dir))
-    candidates.extend(
-        [
-            ("Smart Switch legacy key", fallback_password),
-            ("empty password", ""),
-        ]
+    candidates = _application_credential_candidates(
+        backup_dir,
+        supplied_password=supplied_password,
+        fallback_password=fallback_password,
+        include_empty=True,
     )
 
-    seen: set[str] = set()
-    for source, password in candidates:
-        if password in seen:
-            continue
-        seen.add(password)
+    last_credential_error: AndroidBackupDecodeError | None = None
+    for candidate in candidates:
         try:
-            payload, meta = _decode_data_payload(path, password)
-        except AppDataPasswordError:
-            continue
-        meta["password_source"] = source
+            payload, meta = _decode_data_payload(path, candidate.value)
+        except AndroidBackupDecodeError as exc:
+            if exc.phase in _CREDENTIAL_FAILURE_PHASES:
+                last_credential_error = exc
+                continue
+            raise
+        meta["password_source"] = candidate.source
         return payload, meta
 
-    missing_metadata = not (backup_dir / "SmartSwitchBackup.json").exists()
-    reason = (
-        "SmartSwitchBackup.json is missing from this backup copy. "
-        if missing_metadata
-        else ""
-    )
-    if supplied_password is not None:
-        reason += "The supplied app-data password was not accepted. "
     raise AppDataPasswordError(
-        f"{reason}The Android app-data archive is encrypted, but none of the available "
-        "Smart Switch keys could unlock it. Smart Switch may encrypt app data without "
-        "showing a password prompt. Preserve all root JSON/XML metadata; if a backup "
-        "password was configured, enter it under Export Options."
-    )
+        UNAVAILABLE_CREDENTIAL_MESSAGE
+    ) from last_credential_error
 
 
 def _safe_extract_tar(payload: bytes, out_dir: Path) -> tuple[int, list[str]]:
@@ -386,16 +381,27 @@ def _safe_extract_tar(payload: bytes, out_dir: Path) -> tuple[int, list[str]]:
 
     out_dir.mkdir(parents=True, exist_ok=True)
     extracted = 0
+    budget = ArchiveBudget()
     try:
         with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as tf:
-            for member in tf.getmembers():
+            for member in tf:
+                try:
+                    budget.add(member.size if member.isfile() else 0)
+                except ArchiveLimitError as exc:
+                    warnings.append(
+                        f"Stopped TAR extraction at the resource limit: {exc}"
+                    )
+                    break
                 try:
                     target = _safe_join(out_dir, member.name)
                 except ValueError:
-                    warnings.append(f"Skipped unsafe tar member: {member.name}")
+                    warnings.append("Skipped unsafe tar member path")
                     continue
                 if member.isdir():
                     target.mkdir(parents=True, exist_ok=True)
+                    continue
+                if not member.isfile():
+                    warnings.append("Skipped unsupported tar member type")
                     continue
                 parent = target.parent
                 parent.mkdir(parents=True, exist_ok=True)
@@ -403,7 +409,7 @@ def _safe_extract_tar(payload: bytes, out_dir: Path) -> tuple[int, list[str]]:
                 if source is None:
                     continue
                 with source, target.open("wb") as handle:
-                    handle.write(source.read())
+                    shutil.copyfileobj(source, handle)
                 extracted += 1
     except tarfile.TarError as exc:
         warnings.append(f"Tar parse failed: {exc}")
@@ -454,6 +460,7 @@ def decrypt_extract_app(
                 manifest["penc"] = {
                     "decrypted_size": len(dec),
                     "key_source": key_source,
+                    "validation": "ZIP, CRC, AndroidManifest.xml, and classes.dex valid",
                 }
                 if include_decrypt:
                     dec_path = package_out / f"{package_id}.decrypted.apk"
@@ -461,7 +468,9 @@ def decrypt_extract_app(
                     outputs.append(dec_path)
                 if include_extract:
                     files_dir = package_out / "apk_files"
-                    extracted, skipped, local_warnings = _extract_local_entries(dec, files_dir)
+                    extracted, skipped, local_warnings = _extract_local_entries(
+                        dec, files_dir
+                    )
                     warnings.extend(local_warnings)
                     outputs.append(files_dir)
                     manifest["penc"]["extracted_files"] = extracted
@@ -470,9 +479,11 @@ def decrypt_extract_app(
                 errors.append(f"APK decrypt/extract failed for {package_id}: {exc}")
                 if include_extract:
                     recovered_dir = package_out / "apk_recovered_files"
-                    recovered, failed, recovery_warnings = _extract_recoverable_penc_entries(
-                        penc_path,
-                        recovered_dir,
+                    recovered, failed, recovery_warnings = (
+                        _extract_recoverable_penc_entries(
+                            penc_path,
+                            recovered_dir,
+                        )
                     )
                     warnings.extend(recovery_warnings)
                     manifest["penc"] = {
@@ -516,10 +527,14 @@ def decrypt_extract_app(
     write_manifest(manifest_path, manifest)
     outputs.append(manifest_path)
 
-    return ExportResult(ok=not errors, outputs=outputs, warnings=warnings, errors=errors)
+    return ExportResult(
+        ok=not errors, outputs=outputs, warnings=warnings, errors=errors
+    )
 
 
-def copy_app_apk_payload(package_id: str, backup_dir: Path, out_dir: Path) -> ExportResult:
+def copy_app_apk_payload(
+    package_id: str, backup_dir: Path, out_dir: Path
+) -> ExportResult:
     outputs: list[Path] = []
     warnings: list[str] = []
     errors: list[str] = []
@@ -556,4 +571,6 @@ def copy_app_apk_payload(package_id: str, backup_dir: Path, out_dir: Path) -> Ex
     manifest_path = package_out.parent / "manifest_apk.json"
     write_manifest(manifest_path, manifest)
     outputs.append(manifest_path)
-    return ExportResult(ok=not errors, outputs=outputs, warnings=warnings, errors=errors)
+    return ExportResult(
+        ok=not errors, outputs=outputs, warnings=warnings, errors=errors
+    )

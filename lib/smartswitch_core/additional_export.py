@@ -17,6 +17,7 @@ from smartswitch_core.crypto.smartdecrypt import (
 )
 from smartswitch_core.export import write_manifest
 from smartswitch_core.models import ExportResult
+from smartswitch_core.path_safety import safe_output_path
 
 
 def _copy_tree(source_dir: Path, destination_dir: Path) -> tuple[int, list[Path], list[str]]:
@@ -44,12 +45,7 @@ def _copy_tree(source_dir: Path, destination_dir: Path) -> tuple[int, list[Path]
 
 
 def _safe_target(root: Path, relative: str) -> Path:
-    cleaned = relative.replace("\\", "/").lstrip("/")
-    candidate = (root / cleaned).resolve()
-    root_resolved = root.resolve()
-    if not str(candidate).startswith(str(root_resolved)):
-        raise ValueError("Unsafe output path")
-    return candidate
+    return safe_output_path(root, relative)
 
 
 def _extract_zip_bytes(raw_zip: bytes, destination: Path) -> tuple[int, list[str]]:
