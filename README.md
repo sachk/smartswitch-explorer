@@ -8,10 +8,16 @@
   <br>
   <a href="https://github.com/sachk/smartswitch-explorer/releases/latest/download/smartswitch-explorer-linux-x86_64.AppImage"><strong>Linux (x64 AppImage)</strong></a>
   ·
+  <a href="https://github.com/sachk/smartswitch-explorer/releases/latest/download/smartswitch-explorer-linux-x86_64-legacy.AppImage"><strong>Linux (x64 legacy AppImage)</strong></a>
+  ·
   <a href="https://github.com/sachk/smartswitch-explorer/releases/latest/download/smartswitch-explorer-linux-aarch64.AppImage"><strong>Linux (aarch64 AppImage)</strong></a>
   ·
   <a href="https://github.com/sachk/smartswitch-explorer/releases/latest"><strong>Other Downloads</strong></a>
 </h3>
+
+The x64 legacy AppImage is built and tested on Ubuntu 22.04 for distributions
+with GLIBC 2.35 or newer. The current ARM64 Qt dependency requires GLIBC 2.39,
+so a legacy ARM64 build is not available.
 
 SmartSwitch Explorer is a desktop app for finding encrypted Samsung Smart Switch backups and exporting decrypted contents:
 

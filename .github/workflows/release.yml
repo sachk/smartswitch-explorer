@@ -269,6 +269,91 @@ jobs:
           name: linux-appimage-${{ matrix.arch }}
           path: artifacts/*
 
+  linux-appimage-legacy:
+    name: Linux AppImage (x86_64 legacy)
+    needs: validate-version
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Install Linux Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            file \
+            libegl1 \
+            libgl1 \
+            libglib2.0-0 \
+            libxkbcommon0 \
+            libdbus-1-3 \
+            libx11-6 \
+            libxcb1 \
+            libxcb-cursor0 \
+            libxext6 \
+            libxrender1 \
+            libxi6 \
+            libxrandr2 \
+            libxcursor1 \
+            libsm6 \
+            libice6 \
+            libfontconfig1
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Build Linux directory bundle
+        run: uv run --with pyinstaller python scripts/release/build_pyinstaller.py --profile linux-dir
+
+      - name: Enforce Ubuntu 22.04 GLIBC compatibility
+        run: python scripts/release/check_glibc.py --max-version 2.35 dist/smartswitch-explorer
+
+      - name: Build legacy AppImage
+        shell: bash
+        run: |
+          VERSION="${{ needs.validate-version.outputs.version }}"
+          scripts/release/build_appimage.sh "$VERSION" x86_64 artifacts legacy
+          cp \
+            "artifacts/smartswitch-explorer-${VERSION}-linux-x86_64-legacy.AppImage" \
+            "artifacts/smartswitch-explorer-linux-x86_64-legacy.AppImage"
+
+      - name: Smoke test packaged legacy AppImage
+        shell: bash
+        run: |
+          VERSION="${{ needs.validate-version.outputs.version }}"
+          QT_QPA_PLATFORM=offscreen \
+            "./artifacts/smartswitch-explorer-${VERSION}-linux-x86_64-legacy.AppImage" \
+            --appimage-extract-and-run \
+            --smoke-test
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          VERSION="${{ needs.validate-version.outputs.version }}"
+          python scripts/release/write_sha256.py \
+            "artifacts/smartswitch-explorer-${VERSION}-linux-x86_64-legacy.AppImage" \
+            "artifacts/smartswitch-explorer-linux-x86_64-legacy.AppImage"
+
+      - name: Report artifact sizes
+        shell: bash
+        run: python scripts/release/size_report.py artifacts/*
+
+      - name: Upload legacy AppImage artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-appimage-x86_64-legacy
+          path: artifacts/*
+
   linux-flatpak:
     name: Linux Flatpak (${{ matrix.arch }})
     needs: validate-version
@@ -376,6 +461,7 @@ jobs:
       - windows-exe
       - macos-dmg
       - linux-appimage
+      - linux-appimage-legacy
       - linux-flatpak
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
