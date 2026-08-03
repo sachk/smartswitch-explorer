@@ -37,6 +37,22 @@ SmartSwitch Explorer is a desktop app for finding encrypted Samsung Smart Switch
 4. Choose what to export.
 5. Set the destination folder and click **Export Selected**.
 
+### Linux AppImage permissions
+
+Browsers and GitHub downloads do not preserve the executable permission on an
+AppImage. After verifying that the file came from the project release, make it
+executable for your user and launch it:
+
+```bash
+chmod 700 ~/Downloads/smartswitch-explorer-linux-x86_64.AppImage
+~/Downloads/smartswitch-explorer-linux-x86_64.AppImage
+```
+
+Mode `700` is appropriate for a personal download. Use `755` only when other
+local users should also be able to read and run the application. A newly
+downloaded file having mode `644` or `664` is expected and safer than making
+all downloads executable automatically.
+
 ## Running from source
 
 ```bash
