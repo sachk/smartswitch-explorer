@@ -3,8 +3,8 @@ from __future__ import annotations
 import io
 import json
 import shutil
-import string
 import stat
+import string
 import tarfile
 import zipfile
 from pathlib import Path
@@ -13,11 +13,16 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
 
 from smartswitch_core.applications.android_backup import (
-    AndroidBackupDecodeError,
     UNAVAILABLE_CREDENTIAL_MESSAGE,
+    AndroidBackupDecodeError,
     decode_android_backup_file,
 )
-from smartswitch_core.crypto.common import DEFAULT_DUMMY_HEX, DEFAULT_PENC_IV, derive_dummy_key
+from smartswitch_core.archive_safety import ArchiveBudget, ArchiveLimitError
+from smartswitch_core.crypto.common import (
+    DEFAULT_DUMMY_HEX,
+    DEFAULT_PENC_IV,
+    derive_dummy_key,
+)
 from smartswitch_core.crypto.session_credentials import (
     SessionCredential,
     SessionCredentialError,
@@ -65,8 +70,14 @@ def _metadata_password_candidates(backup_dir: Path) -> list[tuple[str, str]]:
         def visit(value: object) -> None:
             if isinstance(value, dict):
                 for key, child in value.items():
-                    normalized = "".join(char for char in str(key).lower() if char.isalnum())
-                    if normalized in _PASSWORD_FIELD_NAMES and isinstance(child, str) and child:
+                    normalized = "".join(
+                        char for char in str(key).lower() if char.isalnum()
+                    )
+                    if (
+                        normalized in _PASSWORD_FIELD_NAMES
+                        and isinstance(child, str)
+                        and child
+                    ):
                         source = f"{metadata_path.name}:{key}"
                         if normalized == "dummy" and len(child) == 64:
                             try:
@@ -75,7 +86,9 @@ def _metadata_password_candidates(backup_dir: Path) -> list[tuple[str, str]]:
                                 pass
                             else:
                                 if all(char in string.printable for char in decoded):
-                                    candidates.append((f"{source} (hex decoded)", decoded))
+                                    candidates.append(
+                                        (f"{source} (hex decoded)", decoded)
+                                    )
                         candidates.append((source, child))
                     visit(child)
             elif isinstance(value, list):
@@ -128,18 +141,25 @@ def _decrypt_penc(path: Path, dummy: str) -> bytes:
         raise ValueError(".penc file too small")
 
     encrypted_size = int.from_bytes(raw[:4], "big")
-    if encrypted_size <= 0 or encrypted_size > _PENC_ENCRYPTED_PREFIX_BYTES + AES.block_size:
+    if (
+        encrypted_size <= 0
+        or encrypted_size > _PENC_ENCRYPTED_PREFIX_BYTES + AES.block_size
+    ):
         raise ValueError(f"Invalid .penc encrypted segment size: {encrypted_size}")
     encrypted_end = 4 + encrypted_size
     if encrypted_end > len(raw) or encrypted_size % AES.block_size:
         raise ValueError("Truncated or unaligned .penc encrypted segment")
 
     encrypted = raw[4:encrypted_end]
-    decrypted = AES.new(derive_dummy_key(dummy), AES.MODE_CBC, DEFAULT_PENC_IV).decrypt(encrypted)
+    decrypted = AES.new(derive_dummy_key(dummy), AES.MODE_CBC, DEFAULT_PENC_IV).decrypt(
+        encrypted
+    )
     try:
         prefix = unpad(decrypted, AES.block_size)
     except ValueError as exc:
-        raise AppApkDecryptionError("Smart Switch backup dummy key was rejected") from exc
+        raise AppApkDecryptionError(
+            "Smart Switch backup dummy key was rejected"
+        ) from exc
     suffix = raw[encrypted_end:]
     if suffix and len(prefix) != _PENC_ENCRYPTED_PREFIX_BYTES:
         raise AppApkDecryptionError("Smart Switch backup dummy key was rejected")
@@ -148,8 +168,17 @@ def _decrypt_penc(path: Path, dummy: str) -> bytes:
     try:
         _validate_apk(apk)
     except ValueError as exc:
-        raise AppApkDecryptionError("Smart Switch backup dummy key was rejected") from exc
+        raise AppApkDecryptionError(
+            "Smart Switch backup dummy key was rejected"
+        ) from exc
     return apk
+
+
+def _validate_zip_members(members: list[zipfile.ZipInfo]) -> ArchiveBudget:
+    budget = ArchiveBudget()
+    for member in members:
+        budget.add(member.file_size if not member.is_dir() else 0)
+    return budget
 
 
 def _validate_apk(data: bytes) -> dict[str, object]:
@@ -157,11 +186,13 @@ def _validate_apk(data: bytes) -> dict[str, object]:
         raise ValueError("Decrypted .penc does not have ZIP magic")
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
-            names = set(archive.namelist())
+            members = archive.infolist()
+            _validate_zip_members(members)
+            names = {member.filename for member in members}
             if archive.testzip() is not None:
                 raise ValueError("Decrypted APK failed a ZIP CRC check")
-    except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
-        raise ValueError("Decrypted .penc is not a valid ZIP archive") from exc
+    except (ArchiveLimitError, OSError, RuntimeError, zipfile.BadZipFile) as exc:
+        raise ValueError(f"Decrypted .penc archive was rejected: {exc}") from exc
 
     if "AndroidManifest.xml" not in names:
         raise ValueError("Decrypted ZIP is missing AndroidManifest.xml")
@@ -219,7 +250,13 @@ def _extract_recoverable_penc_entries(
         return 0, 0, [f"PENC recovery could not read the APK directory: {exc}"]
 
     with archive:
-        for member in archive.infolist():
+        members = archive.infolist()
+        try:
+            _validate_zip_members(members)
+        except ArchiveLimitError as exc:
+            file_count = sum(not member.is_dir() for member in members)
+            return 0, file_count, [f"PENC recovery refused an oversized archive: {exc}"]
+        for member in members:
             if member.is_dir():
                 continue
             target: Path | None = None
@@ -256,7 +293,17 @@ def _extract_local_entries(data: bytes, out_dir: Path) -> tuple[int, int, list[s
     warnings: list[str] = []
 
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
-        for info in archive.infolist():
+        members = archive.infolist()
+        try:
+            _validate_zip_members(members)
+        except ArchiveLimitError as exc:
+            file_count = sum(not member.is_dir() for member in members)
+            return (
+                0,
+                file_count,
+                [f"Refused to extract an oversized ZIP archive: {exc}"],
+            )
+        for info in members:
             try:
                 target = _safe_join(out_dir, info.filename)
                 if info.is_dir():
@@ -278,7 +325,9 @@ def _extract_local_entries(data: bytes, out_dir: Path) -> tuple[int, int, list[s
     return extracted, skipped, warnings
 
 
-def _split_android_backup_header(raw: bytes, n_lines: int = 9) -> tuple[list[bytes], int]:
+def _split_android_backup_header(
+    raw: bytes, n_lines: int = 9
+) -> tuple[list[bytes], int]:
     lines: list[bytes] = []
     pos = 0
     for _ in range(n_lines):
@@ -320,7 +369,9 @@ def _decode_data_with_candidates(
         meta["password_source"] = candidate.source
         return payload, meta
 
-    raise AppDataPasswordError(UNAVAILABLE_CREDENTIAL_MESSAGE) from last_credential_error
+    raise AppDataPasswordError(
+        UNAVAILABLE_CREDENTIAL_MESSAGE
+    ) from last_credential_error
 
 
 def _safe_extract_tar(payload: bytes, out_dir: Path) -> tuple[int, list[str]]:
@@ -330,9 +381,17 @@ def _safe_extract_tar(payload: bytes, out_dir: Path) -> tuple[int, list[str]]:
 
     out_dir.mkdir(parents=True, exist_ok=True)
     extracted = 0
+    budget = ArchiveBudget()
     try:
         with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as tf:
-            for member in tf.getmembers():
+            for member in tf:
+                try:
+                    budget.add(member.size if member.isfile() else 0)
+                except ArchiveLimitError as exc:
+                    warnings.append(
+                        f"Stopped TAR extraction at the resource limit: {exc}"
+                    )
+                    break
                 try:
                     target = _safe_join(out_dir, member.name)
                 except ValueError:
@@ -350,7 +409,7 @@ def _safe_extract_tar(payload: bytes, out_dir: Path) -> tuple[int, list[str]]:
                 if source is None:
                     continue
                 with source, target.open("wb") as handle:
-                    handle.write(source.read())
+                    shutil.copyfileobj(source, handle)
                 extracted += 1
     except tarfile.TarError as exc:
         warnings.append(f"Tar parse failed: {exc}")
@@ -409,7 +468,9 @@ def decrypt_extract_app(
                     outputs.append(dec_path)
                 if include_extract:
                     files_dir = package_out / "apk_files"
-                    extracted, skipped, local_warnings = _extract_local_entries(dec, files_dir)
+                    extracted, skipped, local_warnings = _extract_local_entries(
+                        dec, files_dir
+                    )
                     warnings.extend(local_warnings)
                     outputs.append(files_dir)
                     manifest["penc"]["extracted_files"] = extracted
@@ -418,9 +479,11 @@ def decrypt_extract_app(
                 errors.append(f"APK decrypt/extract failed for {package_id}: {exc}")
                 if include_extract:
                     recovered_dir = package_out / "apk_recovered_files"
-                    recovered, failed, recovery_warnings = _extract_recoverable_penc_entries(
-                        penc_path,
-                        recovered_dir,
+                    recovered, failed, recovery_warnings = (
+                        _extract_recoverable_penc_entries(
+                            penc_path,
+                            recovered_dir,
+                        )
                     )
                     warnings.extend(recovery_warnings)
                     manifest["penc"] = {
@@ -464,10 +527,14 @@ def decrypt_extract_app(
     write_manifest(manifest_path, manifest)
     outputs.append(manifest_path)
 
-    return ExportResult(ok=not errors, outputs=outputs, warnings=warnings, errors=errors)
+    return ExportResult(
+        ok=not errors, outputs=outputs, warnings=warnings, errors=errors
+    )
 
 
-def copy_app_apk_payload(package_id: str, backup_dir: Path, out_dir: Path) -> ExportResult:
+def copy_app_apk_payload(
+    package_id: str, backup_dir: Path, out_dir: Path
+) -> ExportResult:
     outputs: list[Path] = []
     warnings: list[str] = []
     errors: list[str] = []
@@ -504,4 +571,6 @@ def copy_app_apk_payload(package_id: str, backup_dir: Path, out_dir: Path) -> Ex
     manifest_path = package_out.parent / "manifest_apk.json"
     write_manifest(manifest_path, manifest)
     outputs.append(manifest_path)
-    return ExportResult(ok=not errors, outputs=outputs, warnings=warnings, errors=errors)
+    return ExportResult(
+        ok=not errors, outputs=outputs, warnings=warnings, errors=errors
+    )

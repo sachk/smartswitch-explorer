@@ -84,9 +84,13 @@ extracting:
 - AES-CBC/PKCS#7 padding for the payload
 - zlib decompression when the header says the stream is compressed
 - TAR structure and safe TAR member names/types
+- PBKDF2 work factors of at most 1,000,000 rounds
+- decompressed payloads and extracted archives of at most 4 GiB
+- at most 100,000 TAR or ZIP members
 
 For Smart Switch for Windows backups, the session `Dummy` is recovered from
-`backupHistoryInfo.xml`. Smart Switch stores that value as hexadecimal
+`backupHistoryInfo.xml` with an entity-safe XML parser and a 16 MiB metadata
+limit. Smart Switch stores that value as hexadecimal
 AES-128-ECB ciphertext with zero padding. For basic (`LEVEL_1`) backups, the
 recovered value is the password passed to the Android backup service. The old
 project constant remains a last compatibility candidate, but it is a value from

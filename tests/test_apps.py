@@ -8,10 +8,10 @@ import zipfile
 from pathlib import Path
 from secrets import token_bytes
 
+import pytest
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
-import pytest
-
+from smartswitch_core.applications import android_backup
 from smartswitch_core.applications.android_backup import (
     AndroidBackupDecodeError,
     _checksum_password_bytes,
@@ -25,10 +25,20 @@ from smartswitch_core.applications.decrypt_extract import (
     _decrypt_penc,
     _safe_extract_tar,
     _safe_join,
+    _validate_zip_members,
     copy_app_apk_payload,
     decrypt_extract_app,
 )
-from smartswitch_core.crypto.common import DEFAULT_DUMMY_HEX, DEFAULT_PENC_IV, derive_dummy_key
+from smartswitch_core.archive_safety import (
+    MAX_ARCHIVE_OUTPUT_BYTES,
+    ArchiveBudget,
+    ArchiveLimitError,
+)
+from smartswitch_core.crypto.common import (
+    DEFAULT_DUMMY_HEX,
+    DEFAULT_PENC_IV,
+    derive_dummy_key,
+)
 from smartswitch_core.crypto.session_credentials import (
     SessionCredentialError,
     decrypt_windows_backup_history_dummy,
@@ -71,7 +81,9 @@ def _make_apk(*, extra_size: int = 0) -> bytes:
     return zip_buf.getvalue()
 
 
-def _make_key_checksum(master_key: bytes, checksum_salt: bytes, rounds: int, encoding_name: str) -> bytes:
+def _make_key_checksum(
+    master_key: bytes, checksum_salt: bytes, rounds: int, encoding_name: str
+) -> bytes:
     return hashlib.pbkdf2_hmac(
         "sha1",
         _checksum_password_bytes(master_key, encoding_name),
@@ -99,10 +111,16 @@ def _make_data_file_from_tar_payload(
 
     mk = token_bytes(32)
     mk_iv = token_bytes(16)
-    ck = checksum if checksum is not None else _make_key_checksum(mk, ck_salt, rounds, checksum_encoding)
+    ck = (
+        checksum
+        if checksum is not None
+        else _make_key_checksum(mk, ck_salt, rounds, checksum_encoding)
+    )
 
     if master_key_blob_plain is None:
-        master_key_blob_plain = bytes([len(mk_iv)]) + mk_iv + bytes([len(mk)]) + mk + bytes([len(ck)]) + ck
+        master_key_blob_plain = (
+            bytes([len(mk_iv)]) + mk_iv + bytes([len(mk)]) + mk + bytes([len(ck)]) + ck
+        )
     user_key = hashlib.pbkdf2_hmac(
         "sha1",
         _password_bytes(password, user_key_encoding),
@@ -110,7 +128,9 @@ def _make_data_file_from_tar_payload(
         rounds,
         dklen=32,
     )
-    mk_blob = AES.new(user_key, AES.MODE_CBC, user_iv).encrypt(pad(master_key_blob_plain, 16))
+    mk_blob = AES.new(user_key, AES.MODE_CBC, user_iv).encrypt(
+        pad(master_key_blob_plain, 16)
+    )
 
     if payload_plain is None:
         if compressed:
@@ -121,19 +141,22 @@ def _make_data_file_from_tar_payload(
             payload_plain = payload
     payload_enc = AES.new(mk, AES.MODE_CBC, mk_iv).encrypt(pad(payload_plain, 16))
 
-    header = b"\n".join(
-        [
-            b"ANDROID BACKUP",
-            b"5",
-            b"1" if compressed else b"0",
-            b"AES-256",
-            user_salt.hex().encode("ascii"),
-            ck_salt.hex().encode("ascii"),
-            str(rounds).encode("ascii"),
-            user_iv.hex().encode("ascii"),
-            mk_blob.hex().encode("ascii"),
-        ]
-    ) + b"\n"
+    header = (
+        b"\n".join(
+            [
+                b"ANDROID BACKUP",
+                b"5",
+                b"1" if compressed else b"0",
+                b"AES-256",
+                user_salt.hex().encode("ascii"),
+                ck_salt.hex().encode("ascii"),
+                str(rounds).encode("ascii"),
+                user_iv.hex().encode("ascii"),
+                mk_blob.hex().encode("ascii"),
+            ]
+        )
+        + b"\n"
+    )
 
     return header + payload_enc
 
@@ -144,9 +167,13 @@ def test_decrypt_extract_app_apk_and_data(tmp_path: Path) -> None:
     apk_dir.mkdir(parents=True)
     session_dummy = "0123456789ABCDEF0123456789ABCDEF0123"
     _write_windows_backup_history(backup, session_dummy)
-    (backup / "ReqItemsInfo.json").write_text('{"SecurityLevel":"LEVEL_1"}', encoding="utf-8")
+    (backup / "ReqItemsInfo.json").write_text(
+        '{"SecurityLevel":"LEVEL_1"}', encoding="utf-8"
+    )
 
-    (apk_dir / "com.example.app.penc").write_bytes(_make_penc_from_plain(_make_apk(), session_dummy))
+    (apk_dir / "com.example.app.penc").write_bytes(
+        _make_penc_from_plain(_make_apk(), session_dummy)
+    )
 
     # Build a tiny tar payload for .data decoding.
     tar_buf = io.BytesIO()
@@ -172,17 +199,30 @@ def test_decrypt_extract_app_apk_and_data(tmp_path: Path) -> None:
     )
 
     assert result.ok
-    manifest_text = (out / "com.example.app" / "manifest.json").read_text(encoding="utf-8")
+    manifest_text = (out / "com.example.app" / "manifest.json").read_text(
+        encoding="utf-8"
+    )
     assert "backupHistoryInfo.xml (Windows session Dummy)" in manifest_text
     assert session_dummy not in manifest_text
-    assert (out / "com.example.app" / "apk_files" / "hello.txt").read_bytes() == b"world"
-    assert (out / "com.example.app" / "data_files" / "apps" / "com.example.app" / "_manifest").exists()
+    assert (
+        out / "com.example.app" / "apk_files" / "hello.txt"
+    ).read_bytes() == b"world"
+    assert (
+        out
+        / "com.example.app"
+        / "data_files"
+        / "apps"
+        / "com.example.app"
+        / "_manifest"
+    ).exists()
 
 
 def test_windows_backup_history_recovers_session_dummy(tmp_path: Path) -> None:
     dummy = "ABCDEF0123456789ABCDEF0123456789ABCD"
     history = _write_windows_backup_history(tmp_path, dummy)
-    (tmp_path / "ReqItemsInfo.json").write_text('{"SecurityLevel":"LEVEL_1"}', encoding="utf-8")
+    (tmp_path / "ReqItemsInfo.json").write_text(
+        '{"SecurityLevel":"LEVEL_1"}', encoding="utf-8"
+    )
 
     credential = load_session_credential(tmp_path)
 
@@ -194,9 +234,23 @@ def test_windows_backup_history_recovers_session_dummy(tmp_path: Path) -> None:
 
 def test_windows_backup_history_rejects_malformed_dummy(tmp_path: Path) -> None:
     path = tmp_path / "backupHistoryInfo.xml"
-    path.write_text("<BackupHistory><Dummy>not-hex</Dummy></BackupHistory>", encoding="utf-8")
+    path.write_text(
+        "<BackupHistory><Dummy>not-hex</Dummy></BackupHistory>", encoding="utf-8"
+    )
 
     with pytest.raises(SessionCredentialError, match="not valid hexadecimal"):
+        decrypt_windows_backup_history_dummy(path)
+
+
+def test_windows_backup_history_rejects_xml_entities(tmp_path: Path) -> None:
+    path = tmp_path / "backupHistoryInfo.xml"
+    path.write_text(
+        '<!DOCTYPE history [<!ENTITY secret "AAAA">]>'
+        "<BackupHistory><Dummy>&secret;</Dummy></BackupHistory>",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SessionCredentialError, match="Unable to parse"):
         decrypt_windows_backup_history_dummy(path)
 
 
@@ -227,7 +281,9 @@ def test_decrypt_penc_rejects_valid_padding_without_apk(tmp_path: Path) -> None:
 
 def test_decode_data_payload_rejects_wrong_password(tmp_path: Path) -> None:
     data_path = tmp_path / "sample.data"
-    data_path.write_bytes(_make_data_file_from_tar_payload(_tar_payload(), password="correct"))
+    data_path.write_bytes(
+        _make_data_file_from_tar_payload(_tar_payload(), password="correct")
+    )
 
     with pytest.raises(AndroidBackupDecodeError) as exc:
         _decode_data_payload(data_path, "wrong")
@@ -238,7 +294,9 @@ def test_decode_data_payload_rejects_wrong_password(tmp_path: Path) -> None:
 
 def test_decode_data_payload_rejects_invalid_payload_padding(tmp_path: Path) -> None:
     data_path = tmp_path / "sample.data"
-    raw = bytearray(_make_data_file_from_tar_payload(_tar_payload(), password="correct"))
+    raw = bytearray(
+        _make_data_file_from_tar_payload(_tar_payload(), password="correct")
+    )
     raw[-32] ^= 0x01
     data_path.write_bytes(raw)
 
@@ -304,6 +362,21 @@ def test_decode_data_payload_rejects_non_aligned_payload(tmp_path: Path) -> None
     assert exc.value.phase == "ciphertext not block-aligned"
 
 
+def test_decode_data_payload_rejects_excessive_pbkdf_rounds(tmp_path: Path) -> None:
+    data_path = tmp_path / "sample.data"
+    lines = _make_data_file_from_tar_payload(_tar_payload(), password="correct").split(
+        b"\n", 9
+    )
+    lines[6] = str(android_backup.MAX_PBKDF2_ROUNDS + 1).encode("ascii")
+    data_path.write_bytes(b"\n".join(lines))
+
+    with pytest.raises(AndroidBackupDecodeError) as exc:
+        _decode_data_payload(data_path, "correct")
+
+    assert exc.value.phase == "invalid field length"
+    assert "PBKDF2 rounds" in str(exc.value)
+
+
 def test_decode_data_payload_rejects_invalid_zlib_payload(tmp_path: Path) -> None:
     data_path = tmp_path / "sample.data"
     data_path.write_bytes(
@@ -321,9 +394,31 @@ def test_decode_data_payload_rejects_invalid_zlib_payload(tmp_path: Path) -> Non
     assert exc.value.phase == "zlib decompression failure"
 
 
+def test_decode_data_payload_rejects_excessive_decompressed_size(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    data_path = tmp_path / "sample.data"
+    data_path.write_bytes(
+        _make_data_file_from_tar_payload(
+            _tar_payload(),
+            password="correct",
+            compressed=True,
+        )
+    )
+    monkeypatch.setattr(android_backup, "MAX_DECOMPRESSED_PAYLOAD_BYTES", 1024)
+
+    with pytest.raises(AndroidBackupDecodeError) as exc:
+        _decode_data_payload(data_path, "correct")
+
+    assert exc.value.phase == "resource limit exceeded"
+
+
 def test_decode_data_payload_rejects_invalid_tar_payload(tmp_path: Path) -> None:
     data_path = tmp_path / "sample.data"
-    data_path.write_bytes(_make_data_file_from_tar_payload(b"not a tar archive", password="correct"))
+    data_path.write_bytes(
+        _make_data_file_from_tar_payload(b"not a tar archive", password="correct")
+    )
 
     with pytest.raises(AndroidBackupDecodeError) as exc:
         _decode_data_payload(data_path, "correct")
@@ -352,14 +447,37 @@ def test_decode_data_payload_accepts_legacy_password_encoding(tmp_path: Path) ->
 
 def test_diagnostic_does_not_leak_credentials(tmp_path: Path) -> None:
     data_path = tmp_path / "sample.data"
-    data_path.write_bytes(_make_data_file_from_tar_payload(_tar_payload(), password="secret-password"))
+    data_path.write_bytes(
+        _make_data_file_from_tar_payload(_tar_payload(), password="secret-password")
+    )
 
-    inspection = inspect_android_backup_file(data_path, credential_candidates=["wrong-password"])
+    inspection = inspect_android_backup_file(
+        data_path, credential_candidates=["wrong-password"]
+    )
     public = str(inspection.public_dict())
 
     assert inspection.phase == "master-key padding failure"
     assert "wrong-password" not in public
     assert "secret-password" not in public
+
+
+def test_archive_budget_rejects_member_and_byte_overflow() -> None:
+    member_budget = ArchiveBudget(max_members=1, max_bytes=10)
+    member_budget.add(1)
+    with pytest.raises(ArchiveLimitError, match="more than"):
+        member_budget.add(1)
+
+    byte_budget = ArchiveBudget(max_members=2, max_bytes=10)
+    with pytest.raises(ArchiveLimitError, match="expands beyond"):
+        byte_budget.add(11)
+
+
+def test_validate_zip_members_rejects_declared_expansion() -> None:
+    member = zipfile.ZipInfo("oversized.bin")
+    member.file_size = MAX_ARCHIVE_OUTPUT_BYTES + 1
+
+    with pytest.raises(ArchiveLimitError, match="expands beyond"):
+        _validate_zip_members([member])
 
 
 def test_safe_join_rejects_textual_prefix_escape(tmp_path: Path) -> None:
@@ -370,7 +488,9 @@ def test_safe_join_rejects_textual_prefix_escape(tmp_path: Path) -> None:
         _safe_join(root, "../out-escape/file.txt")
 
 
-def test_safe_extract_tar_rejects_path_escape_and_special_member(tmp_path: Path) -> None:
+def test_safe_extract_tar_rejects_path_escape_and_special_member(
+    tmp_path: Path,
+) -> None:
     payload = io.BytesIO()
     with tarfile.open(fileobj=payload, mode="w") as tf:
         escape = tarfile.TarInfo("../out-escape/file.txt")
@@ -402,7 +522,9 @@ def test_copy_app_apk_payload(tmp_path: Path) -> None:
 
     assert result.ok
     assert (out / "com.example.app" / "apk_payload" / "com.example.app.penc").exists()
-    assert (out / "com.example.app" / "apk_payload" / "com.example.app_split_config.en.apk").exists()
+    assert (
+        out / "com.example.app" / "apk_payload" / "com.example.app_split_config.en.apk"
+    ).exists()
     assert (out / "com.example.app" / "manifest_apk.json").exists()
 
 
@@ -453,7 +575,6 @@ def test_app_data_uses_password_from_backup_metadata(tmp_path: Path) -> None:
     assert not result.errors
 
 
-
 def test_app_uses_hex_encoded_dummy_from_backup_metadata(tmp_path: Path) -> None:
     backup = tmp_path / "backup"
     apk_dir = backup / "APKFILE"
@@ -464,7 +585,9 @@ def test_app_uses_hex_encoded_dummy_from_backup_metadata(tmp_path: Path) -> None
         encoding="utf-8",
     )
     apk = _make_apk()
-    (apk_dir / "com.example.app.penc").write_bytes(_make_penc_from_plain(apk, dummy=dummy))
+    (apk_dir / "com.example.app.penc").write_bytes(
+        _make_penc_from_plain(apk, dummy=dummy)
+    )
     (apk_dir / "com.example.app.data").write_bytes(
         _make_data_file_from_tar_payload(_tar_payload(), password=dummy)
     )
@@ -503,7 +626,10 @@ def test_app_data_rejected_key_has_actionable_error(tmp_path: Path) -> None:
     )
 
     assert not result.ok
-    assert "Unable to unwrap the master key with the available credential" in result.errors[0]
+    assert (
+        "Unable to unwrap the master key with the available credential"
+        in result.errors[0]
+    )
     assert "different Smart Switch session key or password" in result.errors[0]
     assert "Padding" not in result.errors[0]
 

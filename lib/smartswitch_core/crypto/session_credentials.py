@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import json
-from pathlib import Path
 import string
-import xml.etree.ElementTree as ET
+from dataclasses import dataclass, field
+from pathlib import Path
 
 from Crypto.Cipher import AES
+from defusedxml import ElementTree as ET
+from defusedxml.common import DefusedXmlException
 
 from smartswitch_core.crypto.common import DEFAULT_DUMMY_HEX
-
 
 _WINDOWS_HISTORY_KEY = b"0b1e96db05d64ea4"
 _AES_BLOCK_BYTES = 16
@@ -34,7 +34,9 @@ def _local_name(tag: str) -> str:
 def _read_limited(path: Path) -> bytes:
     size = path.stat().st_size
     if size > _MAX_METADATA_BYTES:
-        raise SessionCredentialError("Smart Switch credential metadata is unexpectedly large")
+        raise SessionCredentialError(
+            "Smart Switch credential metadata is unexpectedly large"
+        )
     return path.read_bytes()
 
 
@@ -43,10 +45,14 @@ def _validate_dummy(raw: bytes) -> str:
     try:
         value = raw.decode("ascii")
     except UnicodeDecodeError as exc:
-        raise SessionCredentialError("Decrypted Smart Switch Dummy is not ASCII") from exc
+        raise SessionCredentialError(
+            "Decrypted Smart Switch Dummy is not ASCII"
+        ) from exc
 
     if not 32 <= len(value) <= 128 or len(value) % 2:
-        raise SessionCredentialError("Decrypted Smart Switch Dummy has an invalid length")
+        raise SessionCredentialError(
+            "Decrypted Smart Switch Dummy has an invalid length"
+        )
     if any(char not in string.hexdigits for char in value):
         raise SessionCredentialError("Decrypted Smart Switch Dummy is not hexadecimal")
     return value
@@ -61,8 +67,10 @@ def decrypt_windows_backup_history_dummy(path: Path) -> str:
 
     try:
         root = ET.fromstring(_read_limited(path))
-    except (OSError, ET.ParseError) as exc:
-        raise SessionCredentialError("Unable to parse Smart Switch credential metadata") from exc
+    except (DefusedXmlException, OSError, ET.ParseError) as exc:
+        raise SessionCredentialError(
+            "Unable to parse Smart Switch credential metadata"
+        ) from exc
 
     values = [
         (element.text or "").strip()
@@ -70,14 +78,20 @@ def decrypt_windows_backup_history_dummy(path: Path) -> str:
         if _local_name(element.tag) == "Dummy" and (element.text or "").strip()
     ]
     if len(values) != 1:
-        raise SessionCredentialError("Smart Switch credential metadata must contain one Dummy value")
+        raise SessionCredentialError(
+            "Smart Switch credential metadata must contain one Dummy value"
+        )
 
     encoded = values[0]
     if len(encoded) % 2 or any(char not in string.hexdigits for char in encoded):
-        raise SessionCredentialError("Encrypted Smart Switch Dummy is not valid hexadecimal")
+        raise SessionCredentialError(
+            "Encrypted Smart Switch Dummy is not valid hexadecimal"
+        )
     ciphertext = bytes.fromhex(encoded)
     if not ciphertext or len(ciphertext) % _AES_BLOCK_BYTES:
-        raise SessionCredentialError("Encrypted Smart Switch Dummy is not AES block-aligned")
+        raise SessionCredentialError(
+            "Encrypted Smart Switch Dummy is not AES block-aligned"
+        )
 
     plaintext = AES.new(_WINDOWS_HISTORY_KEY, AES.MODE_ECB).decrypt(ciphertext)
     return _validate_dummy(plaintext)
@@ -120,7 +134,9 @@ def credential_candidates(
     except SessionCredentialError:
         pass
     if include_legacy_default:
-        candidates.append(SessionCredential(DEFAULT_DUMMY_HEX, "legacy project default"))
+        candidates.append(
+            SessionCredential(DEFAULT_DUMMY_HEX, "legacy project default")
+        )
 
     deduplicated: list[SessionCredential] = []
     seen: set[str] = set()
