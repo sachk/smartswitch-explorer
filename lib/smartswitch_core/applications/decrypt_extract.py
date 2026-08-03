@@ -8,6 +8,7 @@ import string
 import tarfile
 import zipfile
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
@@ -15,9 +16,15 @@ from Crypto.Util.Padding import unpad
 from smartswitch_core.applications.android_backup import (
     UNAVAILABLE_CREDENTIAL_MESSAGE,
     AndroidBackupDecodeError,
-    decode_android_backup_file,
+    AndroidBackupMetadata,
+    decode_android_backup_to_tar,
 )
-from smartswitch_core.archive_safety import ArchiveBudget, ArchiveLimitError
+from smartswitch_core.archive_safety import (
+    MAX_APK_OUTPUT_BYTES,
+    ArchiveBudget,
+    ArchiveLimitError,
+    DiskSpaceGuard,
+)
 from smartswitch_core.crypto.common import (
     DEFAULT_DUMMY_HEX,
     DEFAULT_PENC_IV,
@@ -175,7 +182,7 @@ def _decrypt_penc(path: Path, dummy: str) -> bytes:
 
 
 def _validate_zip_members(members: list[zipfile.ZipInfo]) -> ArchiveBudget:
-    budget = ArchiveBudget()
+    budget = ArchiveBudget(max_bytes=MAX_APK_OUTPUT_BYTES)
     for member in members:
         budget.add(member.file_size if not member.is_dir() else 0)
     return budget
@@ -252,10 +259,11 @@ def _extract_recoverable_penc_entries(
     with archive:
         members = archive.infolist()
         try:
-            _validate_zip_members(members)
+            budget = _validate_zip_members(members)
+            DiskSpaceGuard(out_dir).consume(budget.bytes)
         except ArchiveLimitError as exc:
             file_count = sum(not member.is_dir() for member in members)
-            return 0, file_count, [f"PENC recovery refused an oversized archive: {exc}"]
+            return 0, file_count, [f"PENC recovery refused the archive: {exc}"]
         for member in members:
             if member.is_dir():
                 continue
@@ -295,14 +303,11 @@ def _extract_local_entries(data: bytes, out_dir: Path) -> tuple[int, int, list[s
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         members = archive.infolist()
         try:
-            _validate_zip_members(members)
+            budget = _validate_zip_members(members)
+            DiskSpaceGuard(out_dir).consume(budget.bytes)
         except ArchiveLimitError as exc:
             file_count = sum(not member.is_dir() for member in members)
-            return (
-                0,
-                file_count,
-                [f"Refused to extract an oversized ZIP archive: {exc}"],
-            )
+            return 0, file_count, [f"Refused to extract ZIP archive: {exc}"]
         for info in members:
             try:
                 target = _safe_join(out_dir, info.filename)
@@ -339,17 +344,22 @@ def _split_android_backup_header(
     return lines, pos
 
 
-def _decode_data_payload(path: Path, password: str) -> tuple[bytes, dict]:
-    return decode_android_backup_file(path, password)
+def _decode_data_payload(
+    path: Path,
+    password: str,
+    output_path: Path,
+) -> AndroidBackupMetadata:
+    return decode_android_backup_to_tar(path, password, output_path)
 
 
 def _decode_data_with_candidates(
     path: Path,
     backup_dir: Path,
+    output_path: Path,
     *,
     supplied_password: str | None,
     fallback_password: str,
-) -> tuple[bytes, dict]:
+) -> AndroidBackupMetadata:
     candidates = _application_credential_candidates(
         backup_dir,
         supplied_password=supplied_password,
@@ -360,30 +370,34 @@ def _decode_data_with_candidates(
     last_credential_error: AndroidBackupDecodeError | None = None
     for candidate in candidates:
         try:
-            payload, meta = _decode_data_payload(path, candidate.value)
+            meta = _decode_data_payload(path, candidate.value, output_path)
         except AndroidBackupDecodeError as exc:
             if exc.phase in _CREDENTIAL_FAILURE_PHASES:
                 last_credential_error = exc
                 continue
             raise
         meta["password_source"] = candidate.source
-        return payload, meta
+        return meta
 
     raise AppDataPasswordError(
         UNAVAILABLE_CREDENTIAL_MESSAGE
     ) from last_credential_error
 
 
-def _safe_extract_tar(payload: bytes, out_dir: Path) -> tuple[int, list[str]]:
+def _safe_extract_tar(tar_path: Path, out_dir: Path) -> tuple[int, list[str]]:
     warnings: list[str] = []
-    if not payload:
+    if not tar_path.is_file() or tar_path.stat().st_size == 0:
         return 0, warnings
 
     out_dir.mkdir(parents=True, exist_ok=True)
     extracted = 0
     budget = ArchiveBudget()
     try:
-        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as tf:
+        DiskSpaceGuard(out_dir).consume(tar_path.stat().st_size)
+    except ArchiveLimitError as exc:
+        return 0, [f"Refused to extract TAR archive: {exc}"]
+    try:
+        with tarfile.open(tar_path, mode="r:") as tf:
             for member in tf:
                 try:
                     budget.add(member.size if member.isfile() else 0)
@@ -403,13 +417,12 @@ def _safe_extract_tar(payload: bytes, out_dir: Path) -> tuple[int, list[str]]:
                 if not member.isfile():
                     warnings.append("Skipped unsupported tar member type")
                     continue
-                parent = target.parent
-                parent.mkdir(parents=True, exist_ok=True)
+                target.parent.mkdir(parents=True, exist_ok=True)
                 source = tf.extractfile(member)
                 if source is None:
                     continue
                 with source, target.open("wb") as handle:
-                    shutil.copyfileobj(source, handle)
+                    shutil.copyfileobj(source, handle, length=1024 * 1024)
                 extracted += 1
     except tarfile.TarError as exc:
         warnings.append(f"Tar parse failed: {exc}")
@@ -501,23 +514,31 @@ def decrypt_extract_app(
         data_path = apk_dir / f"{package_id}.data"
         if data_path.exists():
             try:
-                payload, meta = _decode_data_with_candidates(
-                    data_path,
-                    backup_dir,
-                    supplied_password=app_data_password,
-                    fallback_password=dummy_hex,
-                )
-                manifest["data"] = meta
-                if include_decrypt:
-                    tar_path = package_out / "data.decoded.tar"
-                    tar_path.write_bytes(payload)
-                    outputs.append(tar_path)
-                if include_extract:
-                    data_dir = package_out / "data_files"
-                    extracted, local_warnings = _safe_extract_tar(payload, data_dir)
-                    warnings.extend(local_warnings)
-                    manifest["data"]["extracted_files"] = extracted
-                    outputs.append(data_dir)
+                with TemporaryDirectory(
+                    prefix=".smartswitch-data-",
+                    dir=package_out,
+                ) as temporary_directory:
+                    decoded_tar = Path(temporary_directory) / "decoded.tar"
+                    meta = _decode_data_with_candidates(
+                        data_path,
+                        backup_dir,
+                        decoded_tar,
+                        supplied_password=app_data_password,
+                        fallback_password=dummy_hex,
+                    )
+                    manifest["data"] = meta
+                    if include_extract:
+                        data_dir = package_out / "data_files"
+                        extracted, local_warnings = _safe_extract_tar(
+                            decoded_tar, data_dir
+                        )
+                        warnings.extend(local_warnings)
+                        manifest["data"]["extracted_files"] = extracted
+                        outputs.append(data_dir)
+                    if include_decrypt:
+                        tar_path = package_out / "data.decoded.tar"
+                        decoded_tar.replace(tar_path)
+                        outputs.append(tar_path)
             except Exception as exc:  # pragma: no cover - defensive boundary
                 errors.append(f"Data decode/extract failed for {package_id}: {exc}")
         else:

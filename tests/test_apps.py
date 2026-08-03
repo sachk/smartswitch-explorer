@@ -11,12 +11,12 @@ from secrets import token_bytes
 import pytest
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
-from smartswitch_core.applications import android_backup
 from smartswitch_core.applications.android_backup import (
+    MAX_PBKDF2_ROUNDS,
     AndroidBackupDecodeError,
     _checksum_password_bytes,
     _password_bytes,
-    decode_android_backup_file,
+    decode_android_backup_to_tar,
     inspect_android_backup_file,
 )
 from smartswitch_core.applications.decrypt_extract import (
@@ -30,9 +30,10 @@ from smartswitch_core.applications.decrypt_extract import (
     decrypt_extract_app,
 )
 from smartswitch_core.archive_safety import (
-    MAX_ARCHIVE_OUTPUT_BYTES,
+    MAX_APK_OUTPUT_BYTES,
     ArchiveBudget,
     ArchiveLimitError,
+    DiskSpaceGuard,
 )
 from smartswitch_core.crypto.common import (
     DEFAULT_DUMMY_HEX,
@@ -286,7 +287,7 @@ def test_decode_data_payload_rejects_wrong_password(tmp_path: Path) -> None:
     )
 
     with pytest.raises(AndroidBackupDecodeError) as exc:
-        _decode_data_payload(data_path, "wrong")
+        _decode_data_payload(data_path, "wrong", tmp_path / "decoded.tar")
 
     assert exc.value.phase == "master-key padding failure"
     assert "Unable to unwrap the master key" in str(exc.value)
@@ -301,7 +302,7 @@ def test_decode_data_payload_rejects_invalid_payload_padding(tmp_path: Path) -> 
     data_path.write_bytes(raw)
 
     with pytest.raises(AndroidBackupDecodeError) as exc:
-        _decode_data_payload(data_path, "correct")
+        _decode_data_payload(data_path, "correct", tmp_path / "decoded.tar")
 
     assert exc.value.phase == "payload padding failure"
 
@@ -317,7 +318,7 @@ def test_decode_data_payload_rejects_invalid_checksum(tmp_path: Path) -> None:
     )
 
     with pytest.raises(AndroidBackupDecodeError) as exc:
-        _decode_data_payload(data_path, "correct")
+        _decode_data_payload(data_path, "correct", tmp_path / "decoded.tar")
 
     assert exc.value.phase == "master-key checksum mismatch"
 
@@ -330,7 +331,7 @@ def test_decode_data_payload_rejects_truncated_master_key_blob(tmp_path: Path) -
     data_path.write_bytes(b"\n".join(lines))
 
     with pytest.raises(AndroidBackupDecodeError) as exc:
-        _decode_data_payload(data_path, "correct")
+        _decode_data_payload(data_path, "correct", tmp_path / "decoded.tar")
 
     assert exc.value.phase == "ciphertext not block-aligned"
 
@@ -346,7 +347,7 @@ def test_decode_data_payload_rejects_invalid_master_key_lengths(tmp_path: Path) 
     )
 
     with pytest.raises(AndroidBackupDecodeError) as exc:
-        _decode_data_payload(data_path, "correct")
+        _decode_data_payload(data_path, "correct", tmp_path / "decoded.tar")
 
     assert exc.value.phase == "malformed master-key structure"
 
@@ -357,7 +358,7 @@ def test_decode_data_payload_rejects_non_aligned_payload(tmp_path: Path) -> None
     data_path.write_bytes(raw[:-1])
 
     with pytest.raises(AndroidBackupDecodeError) as exc:
-        _decode_data_payload(data_path, "correct")
+        _decode_data_payload(data_path, "correct", tmp_path / "decoded.tar")
 
     assert exc.value.phase == "ciphertext not block-aligned"
 
@@ -367,11 +368,11 @@ def test_decode_data_payload_rejects_excessive_pbkdf_rounds(tmp_path: Path) -> N
     lines = _make_data_file_from_tar_payload(_tar_payload(), password="correct").split(
         b"\n", 9
     )
-    lines[6] = str(android_backup.MAX_PBKDF2_ROUNDS + 1).encode("ascii")
+    lines[6] = str(MAX_PBKDF2_ROUNDS + 1).encode("ascii")
     data_path.write_bytes(b"\n".join(lines))
 
     with pytest.raises(AndroidBackupDecodeError) as exc:
-        _decode_data_payload(data_path, "correct")
+        _decode_data_payload(data_path, "correct", tmp_path / "decoded.tar")
 
     assert exc.value.phase == "invalid field length"
     assert "PBKDF2 rounds" in str(exc.value)
@@ -389,29 +390,44 @@ def test_decode_data_payload_rejects_invalid_zlib_payload(tmp_path: Path) -> Non
     )
 
     with pytest.raises(AndroidBackupDecodeError) as exc:
-        _decode_data_payload(data_path, "correct")
+        _decode_data_payload(data_path, "correct", tmp_path / "decoded.tar")
 
     assert exc.value.phase == "zlib decompression failure"
 
 
-def test_decode_data_payload_rejects_excessive_decompressed_size(
+def test_decode_data_payload_streams_large_compressed_tar(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    member_size = 32 * 1024 * 1024
+    payload_buffer = io.BytesIO()
+    with tarfile.open(fileobj=payload_buffer, mode="w") as archive:
+        member = tarfile.TarInfo("apps/example/large.bin")
+        member.size = member_size
+        archive.addfile(member, io.BytesIO(b"\0" * member_size))
+    payload = payload_buffer.getvalue()
+
     data_path = tmp_path / "sample.data"
     data_path.write_bytes(
         _make_data_file_from_tar_payload(
-            _tar_payload(),
+            payload,
             password="correct",
             compressed=True,
         )
     )
-    monkeypatch.setattr(android_backup, "MAX_DECOMPRESSED_PAYLOAD_BYTES", 1024)
+    del payload
+    del payload_buffer
 
-    with pytest.raises(AndroidBackupDecodeError) as exc:
-        _decode_data_payload(data_path, "correct")
+    def reject_unbounded_read(_path: Path) -> bytes:
+        raise AssertionError("decoder attempted an unbounded read")
 
-    assert exc.value.phase == "resource limit exceeded"
+    monkeypatch.setattr(Path, "read_bytes", reject_unbounded_read)
+    decoded_tar = tmp_path / "decoded.tar"
+    meta = _decode_data_payload(data_path, "correct", decoded_tar)
+
+    assert decoded_tar.stat().st_size > member_size
+    assert meta["tar_file_bytes"] == member_size
+    assert meta["tar_entries"] == 1
 
 
 def test_decode_data_payload_rejects_invalid_tar_payload(tmp_path: Path) -> None:
@@ -421,7 +437,7 @@ def test_decode_data_payload_rejects_invalid_tar_payload(tmp_path: Path) -> None
     )
 
     with pytest.raises(AndroidBackupDecodeError) as exc:
-        _decode_data_payload(data_path, "correct")
+        _decode_data_payload(data_path, "correct", tmp_path / "decoded.tar")
 
     assert exc.value.phase == "invalid TAR"
 
@@ -438,9 +454,10 @@ def test_decode_data_payload_accepts_legacy_password_encoding(tmp_path: Path) ->
         )
     )
 
-    decoded, meta = decode_android_backup_file(data_path, "caf\xe9")
+    decoded_tar = tmp_path / "decoded.tar"
+    meta = decode_android_backup_to_tar(data_path, "caf\xe9", decoded_tar)
 
-    assert decoded == payload
+    assert decoded_tar.read_bytes() == payload
     assert meta["user_key_encoding"] == "legacy-8bit"
     assert meta["checksum_encoding"] == "legacy-8bit"
 
@@ -472,9 +489,23 @@ def test_archive_budget_rejects_member_and_byte_overflow() -> None:
         byte_budget.add(11)
 
 
+def test_archive_budget_allows_unbounded_streamed_bytes() -> None:
+    budget = ArchiveBudget(max_members=1)
+    budget.add(MAX_APK_OUTPUT_BYTES + 1)
+
+    assert budget.bytes == MAX_APK_OUTPUT_BYTES + 1
+
+
+def test_disk_space_guard_preserves_reserve(tmp_path: Path) -> None:
+    guard = DiskSpaceGuard(tmp_path, reserve_bytes=10**30)
+
+    with pytest.raises(ArchiveLimitError, match="free disk space"):
+        guard.consume(1)
+
+
 def test_validate_zip_members_rejects_declared_expansion() -> None:
     member = zipfile.ZipInfo("oversized.bin")
-    member.file_size = MAX_ARCHIVE_OUTPUT_BYTES + 1
+    member.file_size = MAX_APK_OUTPUT_BYTES + 1
 
     with pytest.raises(ArchiveLimitError, match="expands beyond"):
         _validate_zip_members([member])
@@ -502,7 +533,9 @@ def test_safe_extract_tar_rejects_path_escape_and_special_member(
         link.linkname = "/tmp/target"
         tf.addfile(link)
 
-    extracted, warnings = _safe_extract_tar(payload.getvalue(), tmp_path / "out")
+    tar_path = tmp_path / "unsafe.tar"
+    tar_path.write_bytes(payload.getvalue())
+    extracted, warnings = _safe_extract_tar(tar_path, tmp_path / "out")
 
     assert extracted == 0
     assert len(warnings) == 2

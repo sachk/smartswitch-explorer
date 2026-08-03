@@ -82,11 +82,17 @@ extracting:
 - the complete master-key blob structure: master IV, master key, and checksum
 - PBKDF2-HMAC-SHA1 master-key checksum
 - AES-CBC/PKCS#7 padding for the payload
-- zlib decompression when the header says the stream is compressed
+- streaming zlib decompression when the header says the stream is compressed
 - TAR structure and safe TAR member names/types
 - PBKDF2 work factors of at most 1,000,000 rounds
-- decompressed payloads and extracted archives of at most 4 GiB
-- at most 100,000 TAR or ZIP members
+- at most 100,000 TAR members
+
+Decryption, decompression, validation, and extraction use bounded chunks and a
+temporary TAR on the destination filesystem. Application data has no fixed
+decoded-size limit; processing stops before it would consume the final 512 MiB
+of free space. Failed or cancelled decoding removes the temporary TAR. APK ZIP
+processing remains limited to 4 GiB of expanded content because APKs are small
+and still use the in-memory partial-encryption decoder.
 
 For Smart Switch for Windows backups, the session `Dummy` is recovered from
 `backupHistoryInfo.xml` with an entity-safe XML parser and a 16 MiB metadata

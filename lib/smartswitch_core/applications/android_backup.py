@@ -2,16 +2,22 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import io
 import tarfile
 import zlib
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import BinaryIO, TypedDict
 
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
 
-from smartswitch_core.archive_safety import ArchiveBudget, ArchiveLimitError
+from smartswitch_core.archive_safety import (
+    ArchiveBudget,
+    ArchiveLimitError,
+    DiskSpaceGuard,
+)
 from smartswitch_core.crypto.common import DEFAULT_DUMMY_HEX
 from smartswitch_core.path_safety import safe_relative_parts
 
@@ -23,7 +29,9 @@ PBKDF2_KEY_BYTES = 32
 PBKDF2_SALT_BYTES = 64
 AES_BLOCK_BYTES = 16
 MAX_PBKDF2_ROUNDS = 1_000_000
-MAX_DECOMPRESSED_PAYLOAD_BYTES = 4 * 1024 * 1024 * 1024
+MAX_HEADER_BYTES = 1024 * 1024
+IO_CHUNK_BYTES = 1024 * 1024
+DECOMPRESS_CHUNK_BYTES = 4 * 1024 * 1024
 
 UNAVAILABLE_CREDENTIAL_MESSAGE = (
     "Unable to unwrap the master key with the available credential. "
@@ -57,6 +65,19 @@ class MasterKey:
     key: bytes
     user_key_encoding: str
     checksum_encoding: str
+
+
+class AndroidBackupMetadata(TypedDict, total=False):
+    version: str
+    compressed: int
+    algorithm: str
+    payload_len: int
+    tar_entries: int
+    tar_file_bytes: int
+    user_key_encoding: str
+    checksum_encoding: str
+    password_source: str
+    extracted_files: int
 
 
 @dataclass(slots=True)
@@ -360,10 +381,104 @@ def _unwrap_master_key(header: AndroidBackupHeader, password: str) -> MasterKey:
     raise AndroidBackupDecodeError(phase, UNAVAILABLE_CREDENTIAL_MESSAGE)
 
 
-def _validate_tar_payload(payload: bytes) -> int:
+def _read_header_prefix(path: Path) -> bytes:
+    with path.open("rb") as source:
+        return source.read(MAX_HEADER_BYTES)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(IO_CHUNK_BYTES):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _iter_plain_chunks(source: BinaryIO) -> Iterator[bytes]:
+    while chunk := source.read(IO_CHUNK_BYTES):
+        yield chunk
+
+
+def _iter_decrypted_chunks(
+    source: BinaryIO,
+    master_key: MasterKey,
+) -> Iterator[bytes]:
+    cipher = AES.new(master_key.key, AES.MODE_CBC, master_key.iv)
+    final_block = b""
+    while chunk := source.read(IO_CHUNK_BYTES):
+        decrypted = cipher.decrypt(chunk)
+        buffered = final_block + decrypted
+        if len(buffered) > AES_BLOCK_BYTES:
+            yield buffered[:-AES_BLOCK_BYTES]
+            final_block = buffered[-AES_BLOCK_BYTES:]
+        else:
+            final_block = buffered
+    try:
+        unpadded = unpad(final_block, AES_BLOCK_BYTES)
+    except ValueError as exc:
+        raise AndroidBackupDecodeError(
+            "payload padding failure", "Payload padding is invalid"
+        ) from exc
+    if unpadded:
+        yield unpadded
+
+
+def _write_checked(
+    destination: BinaryIO,
+    chunk: bytes,
+    disk_guard: DiskSpaceGuard,
+) -> int:
+    if not chunk:
+        return 0
+    try:
+        disk_guard.consume(len(chunk))
+        written = destination.write(chunk)
+        if written != len(chunk):
+            raise OSError(f"Short write: expected {len(chunk)} bytes, wrote {written}")
+    except (ArchiveLimitError, OSError) as exc:
+        raise AndroidBackupDecodeError(
+            "output write failure", f"Unable to write decoded payload: {exc}"
+        ) from exc
+    return len(chunk)
+
+
+def _stream_payload_to_tar(
+    chunks: Iterator[bytes],
+    destination: BinaryIO,
+    *,
+    compressed: bool,
+    disk_guard: DiskSpaceGuard,
+) -> int:
+    written = 0
+    if not compressed:
+        for chunk in chunks:
+            written += _write_checked(destination, chunk, disk_guard)
+        return written
+
+    decompressor = zlib.decompressobj()
+    try:
+        for chunk in chunks:
+            pending = chunk
+            while pending:
+                decoded = decompressor.decompress(pending, DECOMPRESS_CHUNK_BYTES)
+                pending = decompressor.unconsumed_tail
+                written += _write_checked(destination, decoded, disk_guard)
+        written += _write_checked(destination, decompressor.flush(), disk_guard)
+    except zlib.error as exc:
+        raise AndroidBackupDecodeError(
+            "zlib decompression failure", "Payload decompression failed"
+        ) from exc
+    if not decompressor.eof or decompressor.unused_data:
+        raise AndroidBackupDecodeError(
+            "zlib decompression failure", "Payload decompression failed"
+        )
+    return written
+
+
+def _validate_tar_file(path: Path) -> tuple[int, int]:
     budget = ArchiveBudget()
     try:
-        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
+        with tarfile.open(path, mode="r:") as archive:
             for member in archive:
                 try:
                     safe_relative_parts(member.name)
@@ -385,80 +500,68 @@ def _validate_tar_payload(payload: bytes) -> int:
         raise AndroidBackupDecodeError(
             "invalid TAR", "Decoded payload is not a valid TAR archive"
         ) from exc
-    return budget.members
+    return budget.members, budget.bytes
 
 
-def decode_android_backup_file(
-    path: Path, password: str
-) -> tuple[bytes, dict[str, object]]:
-    raw = path.read_bytes()
-    header = parse_android_backup_header(raw)
-    payload = raw[header.payload_offset :]
+def decode_android_backup_to_tar(
+    path: Path,
+    password: str,
+    output_path: Path,
+) -> AndroidBackupMetadata:
+    if output_path.exists():
+        raise FileExistsError(f"Decoded output already exists: {output_path}")
 
+    file_size = path.stat().st_size
+    header = parse_android_backup_header(_read_header_prefix(path))
+    payload_size = file_size - header.payload_offset
     if (
         header.encryption_algorithm == ENCRYPTION_ALGORITHM_AES_256
-        and len(payload) % AES_BLOCK_BYTES
+        and payload_size % AES_BLOCK_BYTES
     ):
         raise AndroidBackupDecodeError(
             "ciphertext not block-aligned",
             "Payload ciphertext is not AES block aligned",
         )
 
-    meta: dict[str, object] = {
+    meta: AndroidBackupMetadata = {
         "version": str(header.version),
         "compressed": int(header.compressed),
         "algorithm": header.encryption_algorithm,
         "payload_len": 0,
     }
-
-    if header.encryption_algorithm == ENCRYPTION_ALGORITHM_NONE:
-        plain = payload
-    else:
+    master_key: MasterKey | None = None
+    if header.encryption_algorithm == ENCRYPTION_ALGORITHM_AES_256:
         master_key = _unwrap_master_key(header, password)
-        try:
-            plain = unpad(
-                AES.new(master_key.key, AES.MODE_CBC, master_key.iv).decrypt(payload),
-                AES_BLOCK_BYTES,
-            )
-        except ValueError as exc:
-            raise AndroidBackupDecodeError(
-                "payload padding failure", "Payload padding is invalid"
-            ) from exc
         meta["user_key_encoding"] = master_key.user_key_encoding
         meta["checksum_encoding"] = master_key.checksum_encoding
 
-    if header.compressed:
-        decompressor = zlib.decompressobj()
-        try:
-            plain = decompressor.decompress(plain, MAX_DECOMPRESSED_PAYLOAD_BYTES + 1)
-            if (
-                len(plain) > MAX_DECOMPRESSED_PAYLOAD_BYTES
-                or decompressor.unconsumed_tail
-            ):
-                raise AndroidBackupDecodeError(
-                    "resource limit exceeded",
-                    f"Decoded payload exceeds {MAX_DECOMPRESSED_PAYLOAD_BYTES:,} bytes",
-                )
-            remaining = MAX_DECOMPRESSED_PAYLOAD_BYTES - len(plain)
-            tail = decompressor.flush()
-        except zlib.error as exc:
-            raise AndroidBackupDecodeError(
-                "zlib decompression failure", "Payload decompression failed"
-            ) from exc
-        if len(tail) > remaining:
-            raise AndroidBackupDecodeError(
-                "resource limit exceeded",
-                f"Decoded payload exceeds {MAX_DECOMPRESSED_PAYLOAD_BYTES:,} bytes",
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    complete = False
+    try:
+        disk_guard = DiskSpaceGuard(output_path.parent)
+        with path.open("rb") as source, output_path.open("xb") as destination:
+            source.seek(header.payload_offset)
+            chunks = (
+                _iter_decrypted_chunks(source, master_key)
+                if master_key is not None
+                else _iter_plain_chunks(source)
             )
-        plain += tail
-        if not decompressor.eof or decompressor.unused_data:
-            raise AndroidBackupDecodeError(
-                "zlib decompression failure", "Payload decompression failed"
+            payload_len = _stream_payload_to_tar(
+                chunks,
+                destination,
+                compressed=header.compressed,
+                disk_guard=disk_guard,
             )
+        tar_entries, tar_bytes = _validate_tar_file(output_path)
+        complete = True
+    finally:
+        if not complete:
+            output_path.unlink(missing_ok=True)
 
-    meta["tar_entries"] = _validate_tar_payload(plain)
-    meta["payload_len"] = len(plain)
-    return plain, meta
+    meta["tar_entries"] = tar_entries
+    meta["tar_file_bytes"] = tar_bytes
+    meta["payload_len"] = payload_len
+    return meta
 
 
 def inspect_android_backup_file(
@@ -466,31 +569,32 @@ def inspect_android_backup_file(
     *,
     credential_candidates: list[str] | None = None,
 ) -> AndroidBackupInspection:
-    raw = path.read_bytes()
+    file_size = path.stat().st_size
+    prefix = _read_header_prefix(path)
     inspection = AndroidBackupInspection(
-        file_size=len(raw),
-        sha256=hashlib.sha256(raw).hexdigest(),
+        file_size=file_size,
+        sha256=_sha256_file(path),
     )
 
     try:
-        header = parse_android_backup_header(raw)
+        header = parse_android_backup_header(prefix)
     except AndroidBackupDecodeError as exc:
         inspection.phase = exc.phase
         inspection.message = str(exc)
         try:
-            magic_raw, _offset = _read_header_line(raw, 0)
+            magic_raw, _ = _read_header_line(prefix, 0)
             inspection.magic = _decode_ascii(magic_raw, "magic")
         except AndroidBackupDecodeError:
             inspection.magic = ""
         return inspection
 
-    payload = raw[header.payload_offset :]
+    payload_size = file_size - header.payload_offset
     inspection.magic = header.magic
     inspection.backup_version = header.version
     inspection.compressed_flag = int(header.compressed)
     inspection.encryption_algorithm = header.encryption_algorithm
-    inspection.payload_ciphertext_length = len(payload)
-    inspection.payload_aes_aligned = len(payload) % AES_BLOCK_BYTES == 0
+    inspection.payload_ciphertext_length = payload_size
+    inspection.payload_aes_aligned = payload_size % AES_BLOCK_BYTES == 0
 
     if header.encryption_algorithm == ENCRYPTION_ALGORITHM_AES_256:
         inspection.user_salt_length = len(header.user_salt)
@@ -501,47 +605,40 @@ def inspect_android_backup_file(
         inspection.master_key_blob_aes_aligned = (
             len(header.master_key_blob) % AES_BLOCK_BYTES == 0
         )
-    else:
-        try:
-            _payload, meta = decode_android_backup_file(path, "")
-        except AndroidBackupDecodeError as exc:
-            inspection.phase = exc.phase
-            inspection.message = str(exc)
-            return inspection
-        inspection.phase = "ok"
-        inspection.message = "Decoded payload is TAR-valid"
-        inspection.tar_entries = int(meta.get("tar_entries", 0))
-        inspection.details["payload length"] = int(meta.get("payload_len", 0))
-        return inspection
 
     candidates = (
         credential_candidates
         if credential_candidates is not None
         else [DEFAULT_DUMMY_HEX]
     )
-    if header.encryption_algorithm == ENCRYPTION_ALGORITHM_AES_256 and not candidates:
+    if header.encryption_algorithm == ENCRYPTION_ALGORITHM_NONE:
+        candidates = [""]
+    elif not candidates:
         inspection.phase = "not attempted"
         inspection.message = "No credential candidate supplied"
         return inspection
 
     last_error: AndroidBackupDecodeError | None = None
-    for password in candidates:
-        inspection.credential_attempts += 1
-        try:
-            _payload, meta = decode_android_backup_file(path, password)
-        except AndroidBackupDecodeError as exc:
-            last_error = exc
-            continue
-        inspection.phase = "ok"
-        inspection.message = "Decoded payload is authenticated and TAR-valid"
-        inspection.tar_entries = int(meta.get("tar_entries", 0))
-        inspection.details["payload length"] = int(meta.get("payload_len", 0))
-        return inspection
+    with TemporaryDirectory(prefix="smartswitch-inspect-") as temporary_directory:
+        output_path = Path(temporary_directory) / "decoded.tar"
+        for password in candidates:
+            inspection.credential_attempts += 1
+            try:
+                meta = decode_android_backup_to_tar(path, password, output_path)
+            except AndroidBackupDecodeError as exc:
+                last_error = exc
+                continue
+            inspection.phase = "ok"
+            inspection.message = (
+                "Decoded payload is TAR-valid"
+                if header.encryption_algorithm == ENCRYPTION_ALGORITHM_NONE
+                else "Decoded payload is authenticated and TAR-valid"
+            )
+            inspection.tar_entries = int(meta.get("tar_entries", 0))
+            inspection.details["payload length"] = int(meta.get("payload_len", 0))
+            return inspection
 
     if last_error is not None:
         inspection.phase = last_error.phase
         inspection.message = str(last_error)
-    else:
-        inspection.phase = "ok"
-        inspection.message = "No encrypted payload to unwrap"
     return inspection
