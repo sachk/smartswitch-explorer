@@ -6,7 +6,6 @@ from PySide6.QtCore import QModelIndex, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QDialog,
-    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -22,6 +21,7 @@ from smartswitch_core.models import EnrichmentPatch, Inventory
 from smartswitch_core.sizes import format_bytes
 from gui.localization import tr
 from gui.ui.export_options_dialog import ExportOptionsDialog
+from gui.ui.file_dialogs import select_existing_directory
 from gui.ui.tree_model import InventoryTreeModel, TreeFilterProxyModel
 
 
@@ -168,9 +168,13 @@ class ExplorerPage(QWidget):
         self.tree.collapseAll()
 
     def _pick_destination(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, tr("ExplorerPage", "Select Destination Folder"))
-        if path:
-            self.destination.setText(path)
+        path = select_existing_directory(
+            self,
+            tr("ExplorerPage", "Select Destination Folder"),
+            self.destination.text().strip(),
+        )
+        if path is not None:
+            self.destination.setText(str(path))
 
     def _emit_action(self) -> None:
         selected = self.model.checked_leaf_nodes()

@@ -9,7 +9,6 @@ from pathlib import Path
 from PySide6.QtCore import QSize, Qt, Signal, QThreadPool
 from PySide6.QtGui import QFont, QPixmap
 from PySide6.QtWidgets import (
-    QFileDialog,
     QFrame,
     QGroupBox,
     QGridLayout,
@@ -28,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui.localization import tr
+from gui.ui.file_dialogs import select_existing_directory
 from gui.ui.workers import FunctionWorker
 from smartswitch_core.scan import discover_backup_roots, expand_input_path, find_backups
 
@@ -491,8 +491,12 @@ class LandingPage(QWidget):
             self.refresh()
 
     def _open_folder_dialog(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, tr("LandingPage", "Select Backup Folder"))
-        if not path:
+        path = select_existing_directory(
+            self,
+            tr("LandingPage", "Select Backup Folder"),
+            self.path_input.text().strip(),
+        )
+        if path is None:
             return
         selected = expand_input_path(path)
         self.path_input.setText(str(selected))
