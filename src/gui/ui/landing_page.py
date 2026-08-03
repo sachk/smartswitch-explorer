@@ -111,6 +111,7 @@ def _build_backup_row(backup_dir: Path) -> BackupRowModel:
 
 def _discover_backup_rows(
     recent_hints: list[Path],
+    automatic_roots: list[Path] | None = None,
     *,
     progress=None,
     set_status=None,
@@ -128,7 +129,8 @@ def _discover_backup_rows(
         seen_roots.add(key)
         roots.append(hint)
 
-    for root in discover_backup_roots():
+    discovered_roots = automatic_roots if automatic_roots is not None else discover_backup_roots()
+    for root in discovered_roots:
         key = _path_key(root)
         if key in seen_roots:
             continue
@@ -279,6 +281,7 @@ class LandingPage(QWidget):
         self._recent_backup_hints: list[Path] = []
         self._refresh_running = False
         self._refresh_pending = False
+        self._refresh_worker: FunctionWorker | None = None
         self._thread_pool = QThreadPool(self)
 
         layout = QVBoxLayout(self)
@@ -446,13 +449,20 @@ class LandingPage(QWidget):
         if self._refresh_running:
             self._refresh_pending = True
             return
+        recent_hints = [hint for hint in self._recent_backup_hints if hint.exists()]
+        automatic_roots = discover_backup_roots()
         self._refresh_running = True
         self.listing_started.emit()
+        if not recent_hints and not automatic_roots:
+            self._on_refresh_result([])
+            return
         worker = FunctionWorker(
             _discover_backup_rows,
-            list(self._recent_backup_hints),
+            recent_hints,
+            automatic_roots,
             enable_progress=True,
         )
+        self._refresh_worker = worker
         worker.signals.progress.connect(self.listing_progress.emit)
         worker.signals.status.connect(self.listing_status.emit)
         worker.signals.result.connect(self._on_refresh_result)
@@ -460,6 +470,7 @@ class LandingPage(QWidget):
         self._thread_pool.start(worker)
 
     def _on_refresh_result(self, rows: list[BackupRowModel]) -> None:
+        self._refresh_worker = None
         self.backup_list.clear()
         for row_data in rows:
             item = QListWidgetItem()
@@ -483,6 +494,7 @@ class LandingPage(QWidget):
             self.refresh()
 
     def _on_refresh_error(self, message: str) -> None:
+        self._refresh_worker = None
         self._refresh_running = False
         self.listing_error.emit(message)
         self.listing_finished.emit()
