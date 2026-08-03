@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from threading import Thread
 
 from PySide6.QtCore import QSize, Qt, QThreadPool, QUrl
 from PySide6.QtGui import QCloseEvent, QDesktopServices
@@ -53,7 +54,11 @@ def _render_issue_lines(lines: list[str], *, limit: int = 10) -> str:
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        cleanup_stale_staged_backup_dirs()
+        Thread(
+            target=cleanup_stale_staged_backup_dirs,
+            name="stale-direct-import-cleanup",
+            daemon=True,
+        ).start()
         self.setWindowTitle(tr("MainWindow", "SmartSwitch Explorer"))
         self.resize(QSize(500, 720))
 
