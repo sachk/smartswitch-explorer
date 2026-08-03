@@ -2,13 +2,19 @@
 set -euo pipefail
 
 if [[ $# -lt 2 ]]; then
-  echo "Usage: $0 <version> <arch> [artifacts_dir]" >&2
+  echo "Usage: $0 <version> <arch> [artifacts_dir] [variant]" >&2
   exit 1
 fi
 
 version="$1"
 arch="$2"
 artifacts_dir="${3:-artifacts}"
+variant="${4:-}"
+
+if [[ -n "$variant" && ! "$variant" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+  echo "Invalid AppImage variant: $variant" >&2
+  exit 1
+fi
 
 dist_dir="dist/smartswitch-explorer"
 if [[ ! -d "$dist_dir" ]]; then
@@ -55,11 +61,18 @@ case "$arch" in
 esac
 
 mkdir -p "$artifacts_dir"
-output="$artifacts_dir/smartswitch-explorer-${version}-linux-${arch}.AppImage"
+variant_suffix=""
+if [[ -n "$variant" ]]; then
+  variant_suffix="-${variant}"
+fi
+output="$artifacts_dir/smartswitch-explorer-${version}-linux-${arch}${variant_suffix}.AppImage"
 appimage_comp="${APPIMAGE_COMP:-zstd}"
 appimage_zstd_level="${APPIMAGE_ZSTD_LEVEL:-18}"
 
-tool_path="/tmp/appimagetool-${arch}.AppImage"
+tool_dir="${RUNNER_TEMP:-build/release-tools}"
+mkdir -p "$tool_dir"
+tool_path="$tool_dir/appimagetool-${arch}.AppImage"
+trap 'rm -f "$tool_path"' EXIT
 curl -fsSL "$tool_url" -o "$tool_path"
 chmod +x "$tool_path"
 
