@@ -24,6 +24,11 @@
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.3.1" date="2026-10-06">
+      <description>
+        <p>Fix direct file selection and empty backup refresh crashes, add an Ubuntu 22.04 x86_64 AppImage, and harden release tooling.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-02-22"/>
   </releases>
 </component>
