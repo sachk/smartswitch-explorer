@@ -8,10 +8,23 @@
   <br>
   <a href="https://github.com/sachk/smartswitch-explorer/releases/latest/download/smartswitch-explorer-linux-x86_64.AppImage"><strong>Linux (x64 AppImage)</strong></a>
   ·
+  <a href="https://github.com/sachk/smartswitch-explorer/releases/latest/download/smartswitch-explorer-linux-x86_64-legacy.AppImage"><strong>Linux (x64 legacy AppImage)</strong></a>
+  ·
   <a href="https://github.com/sachk/smartswitch-explorer/releases/latest/download/smartswitch-explorer-linux-aarch64.AppImage"><strong>Linux (aarch64 AppImage)</strong></a>
   ·
   <a href="https://github.com/sachk/smartswitch-explorer/releases/latest"><strong>Other Downloads</strong></a>
 </h3>
+
+The x64 legacy AppImage targets Ubuntu 22.04 (GLIBC 2.35). Release builds check
+the bundled ELF dependency requirements and smoke-test the packaged AppImage on
+Ubuntu 22.04. GLIBC 2.35 is a minimum, not a guarantee for every distribution:
+system graphics, font, and desktop libraries are still required. The locked
+ARM64 Qt dependency targets GLIBC 2.39, so a legacy ARM64 build is not available.
+
+AppImage builds use SHA-256-verified appimagetool 1.9.1 and type2-runtime
+20251108 downloads in a private temporary directory. Both architectures'
+version pins and digests live in `scripts/release/build_appimage.sh`; update
+them together when upgrading these tools.
 
 SmartSwitch Explorer is a desktop app for finding encrypted Samsung Smart Switch backups and exporting decrypted contents:
 
@@ -33,6 +46,22 @@ SmartSwitch Explorer is a desktop app for finding encrypted Samsung Smart Switch
 
 **Refresh** rescans remembered folders and automatically detected backup locations.
 When no locations are available, it immediately shows **No backups detected**.
+
+### Linux AppImage permissions
+
+Browsers and GitHub downloads do not preserve the executable permission on an
+AppImage. After verifying that the file came from the project release, make it
+executable for your user and launch it:
+
+```bash
+chmod 700 ~/Downloads/smartswitch-explorer-linux-x86_64.AppImage
+~/Downloads/smartswitch-explorer-linux-x86_64.AppImage
+```
+
+Mode `700` is appropriate for a personal download. Use `755` only when other
+local users should also be able to read and run the application. A newly
+downloaded file having mode `644` or `664` is expected and safer than making
+all downloads executable automatically.
 
 ## Running from source
 
