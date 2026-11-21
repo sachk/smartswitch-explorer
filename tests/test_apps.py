@@ -24,7 +24,6 @@ from smartswitch_core.applications.decrypt_extract import (
     _decode_data_payload,
     _decrypt_penc,
     _safe_extract_tar,
-    _safe_join,
     _validate_zip_members,
     copy_app_apk_payload,
     decrypt_extract_app,
@@ -45,6 +44,7 @@ from smartswitch_core.crypto.session_credentials import (
     decrypt_windows_backup_history_dummy,
     load_session_credential,
 )
+from smartswitch_core.path_safety import safe_output_path
 
 
 def _make_penc_from_plain(plain: bytes, dummy: str = DEFAULT_DUMMY_HEX) -> bytes:
@@ -511,12 +511,12 @@ def test_validate_zip_members_rejects_declared_expansion() -> None:
         _validate_zip_members([member])
 
 
-def test_safe_join_rejects_textual_prefix_escape(tmp_path: Path) -> None:
+def test_safe_output_path_rejects_textual_prefix_escape(tmp_path: Path) -> None:
     root = tmp_path / "out"
     root.mkdir()
 
     with pytest.raises(ValueError):
-        _safe_join(root, "../out-escape/file.txt")
+        safe_output_path(root, "../out-escape/file.txt")
 
 
 def test_safe_extract_tar_rejects_path_escape_and_special_member(
@@ -535,10 +535,11 @@ def test_safe_extract_tar_rejects_path_escape_and_special_member(
 
     tar_path = tmp_path / "unsafe.tar"
     tar_path.write_bytes(payload.getvalue())
-    extracted, warnings = _safe_extract_tar(tar_path, tmp_path / "out")
+    extracted, warnings, renamed = _safe_extract_tar(tar_path, tmp_path / "out")
 
     assert extracted == 0
     assert len(warnings) == 2
+    assert renamed == {}
     assert not (tmp_path / "out-escape" / "file.txt").exists()
 
 

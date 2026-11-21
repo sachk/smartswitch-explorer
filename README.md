@@ -36,6 +36,11 @@ SmartSwitch Explorer is a desktop app for finding encrypted Samsung Smart Switch
 - Galaxy Watch backups
 - Storage, settings, and other backup categories
 
+When an extracted name cannot exist on the current file system (for example
+Android application data containing `:`), the invalid characters are replaced
+with `_` and the original name is recorded under `renamed_paths` in the `data`
+or `penc` section of the export manifest.
+
 ## How to use
 
 1. Launch the app.

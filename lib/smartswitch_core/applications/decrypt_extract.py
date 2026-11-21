@@ -37,7 +37,7 @@ from smartswitch_core.crypto.session_credentials import (
 )
 from smartswitch_core.export import write_manifest
 from smartswitch_core.models import ExportResult
-from smartswitch_core.path_safety import safe_output_path
+from smartswitch_core.path_safety import SafeOutputPaths
 
 
 class AppDataPasswordError(ValueError):
@@ -136,10 +136,6 @@ def _application_credential_candidates(
         seen.add(candidate.value)
         deduplicated.append(candidate)
     return deduplicated
-
-
-def _safe_join(root: Path, relative_name: str) -> Path:
-    return safe_output_path(root, relative_name)
 
 
 def _decrypt_penc(path: Path, dummy: str) -> bytes:
@@ -245,8 +241,9 @@ def _decode_penc_with_candidates(
 def _extract_recoverable_penc_entries(
     path: Path,
     out_dir: Path,
-) -> tuple[int, int, list[str]]:
+) -> tuple[int, int, list[str], dict[str, str]]:
     out_dir.mkdir(parents=True, exist_ok=True)
+    paths = SafeOutputPaths(out_dir)
     recovered = 0
     failed = 0
     warnings: list[str] = []
@@ -254,7 +251,7 @@ def _extract_recoverable_penc_entries(
     try:
         archive = zipfile.ZipFile(path)
     except (OSError, zipfile.BadZipFile) as exc:
-        return 0, 0, [f"PENC recovery could not read the APK directory: {exc}"]
+        return 0, 0, [f"PENC recovery could not read the APK directory: {exc}"], {}
 
     with archive:
         members = archive.infolist()
@@ -263,7 +260,12 @@ def _extract_recoverable_penc_entries(
             DiskSpaceGuard(out_dir).consume(budget.bytes)
         except ArchiveLimitError as exc:
             file_count = sum(not member.is_dir() for member in members)
-            return 0, file_count, [f"PENC recovery refused the archive: {exc}"]
+            return (
+                0,
+                file_count,
+                [f"PENC recovery refused the archive: {exc}"],
+                {},
+            )
         for member in members:
             if member.is_dir():
                 continue
@@ -272,7 +274,7 @@ def _extract_recoverable_penc_entries(
                 member_type = stat.S_IFMT(member.external_attr >> 16)
                 if member_type and member_type != stat.S_IFREG:
                     raise ValueError("Unsupported ZIP member type")
-                target = _safe_join(out_dir, member.filename)
+                target = paths.path_for(member.filename)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with archive.open(member) as source, target.open("wb") as destination:
                     shutil.copyfileobj(source, destination)
@@ -291,11 +293,15 @@ def _extract_recoverable_penc_entries(
             f"Recovered {recovered} unencrypted APK entries; {failed} entries overlap "
             "the encrypted PENC segment or failed integrity checks."
         )
-    return recovered, failed, warnings
+    return recovered, failed, warnings, paths.mapping
 
 
-def _extract_local_entries(data: bytes, out_dir: Path) -> tuple[int, int, list[str]]:
+def _extract_local_entries(
+    data: bytes,
+    out_dir: Path,
+) -> tuple[int, int, list[str], dict[str, str]]:
     out_dir.mkdir(parents=True, exist_ok=True)
+    paths = SafeOutputPaths(out_dir)
     extracted = 0
     skipped = 0
     warnings: list[str] = []
@@ -307,10 +313,18 @@ def _extract_local_entries(data: bytes, out_dir: Path) -> tuple[int, int, list[s
             DiskSpaceGuard(out_dir).consume(budget.bytes)
         except ArchiveLimitError as exc:
             file_count = sum(not member.is_dir() for member in members)
-            return 0, file_count, [f"Refused to extract ZIP archive: {exc}"]
+            return (
+                0,
+                file_count,
+                [f"Refused to extract ZIP archive: {exc}"],
+                {},
+            )
         for info in members:
             try:
-                target = _safe_join(out_dir, info.filename)
+                target = paths.path_for(
+                    info.filename,
+                    is_directory=info.is_dir(),
+                )
                 if info.is_dir():
                     target.mkdir(parents=True, exist_ok=True)
                     continue
@@ -327,7 +341,7 @@ def _extract_local_entries(data: bytes, out_dir: Path) -> tuple[int, int, list[s
                 skipped += 1
                 warnings.append("Failed to extract a ZIP member")
 
-    return extracted, skipped, warnings
+    return extracted, skipped, warnings, paths.mapping
 
 
 def _split_android_backup_header(
@@ -384,18 +398,22 @@ def _decode_data_with_candidates(
     ) from last_credential_error
 
 
-def _safe_extract_tar(tar_path: Path, out_dir: Path) -> tuple[int, list[str]]:
+def _safe_extract_tar(
+    tar_path: Path,
+    out_dir: Path,
+) -> tuple[int, list[str], dict[str, str]]:
     warnings: list[str] = []
     if not tar_path.is_file() or tar_path.stat().st_size == 0:
-        return 0, warnings
+        return 0, warnings, {}
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    paths = SafeOutputPaths(out_dir)
     extracted = 0
     budget = ArchiveBudget()
     try:
         DiskSpaceGuard(out_dir).consume(tar_path.stat().st_size)
     except ArchiveLimitError as exc:
-        return 0, [f"Refused to extract TAR archive: {exc}"]
+        return 0, [f"Refused to extract TAR archive: {exc}"], {}
     try:
         with tarfile.open(tar_path, mode="r:") as tf:
             for member in tf:
@@ -407,26 +425,44 @@ def _safe_extract_tar(tar_path: Path, out_dir: Path) -> tuple[int, list[str]]:
                     )
                     break
                 try:
-                    target = _safe_join(out_dir, member.name)
+                    target = paths.path_for(
+                        member.name,
+                        is_directory=member.isdir(),
+                    )
                 except ValueError:
                     warnings.append("Skipped unsafe tar member path")
                     continue
                 if member.isdir():
-                    target.mkdir(parents=True, exist_ok=True)
+                    try:
+                        target.mkdir(parents=True, exist_ok=True)
+                    except OSError:
+                        warnings.append(
+                            "Skipped a tar member that could not be written"
+                        )
                     continue
                 if not member.isfile():
                     warnings.append("Skipped unsupported tar member type")
                     continue
-                target.parent.mkdir(parents=True, exist_ok=True)
-                source = tf.extractfile(member)
-                if source is None:
+                try:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    source = tf.extractfile(member)
+                    if source is None:
+                        continue
+                    with source, target.open("wb") as handle:
+                        shutil.copyfileobj(source, handle, length=1024 * 1024)
+                except OSError:
+                    warnings.append(
+                        "Skipped a tar member that could not be written"
+                    )
+                    try:
+                        target.unlink(missing_ok=True)
+                    except OSError:
+                        pass
                     continue
-                with source, target.open("wb") as handle:
-                    shutil.copyfileobj(source, handle, length=1024 * 1024)
                 extracted += 1
     except tarfile.TarError as exc:
         warnings.append(f"Tar parse failed: {exc}")
-    return extracted, warnings
+    return extracted, warnings, paths.mapping
 
 
 def decrypt_extract_app(
@@ -481,28 +517,40 @@ def decrypt_extract_app(
                     outputs.append(dec_path)
                 if include_extract:
                     files_dir = package_out / "apk_files"
-                    extracted, skipped, local_warnings = _extract_local_entries(
-                        dec, files_dir
-                    )
+                    (
+                        extracted,
+                        skipped,
+                        local_warnings,
+                        renamed,
+                    ) = _extract_local_entries(dec, files_dir)
                     warnings.extend(local_warnings)
                     outputs.append(files_dir)
                     manifest["penc"]["extracted_files"] = extracted
                     manifest["penc"]["skipped_files"] = skipped
+                    if renamed:
+                        manifest["penc"]["renamed_paths"] = renamed
             except AppApkDecryptionError as exc:
                 errors.append(f"APK decrypt/extract failed for {package_id}: {exc}")
                 if include_extract:
                     recovered_dir = package_out / "apk_recovered_files"
-                    recovered, failed, recovery_warnings = (
-                        _extract_recoverable_penc_entries(
-                            penc_path,
-                            recovered_dir,
-                        )
+                    (
+                        recovered,
+                        failed,
+                        recovery_warnings,
+                        recovered_renamed,
+                    ) = _extract_recoverable_penc_entries(
+                        penc_path,
+                        recovered_dir,
                     )
                     warnings.extend(recovery_warnings)
                     manifest["penc"] = {
                         "recovered_unencrypted_files": recovered,
                         "unrecoverable_files": failed,
                     }
+                    if recovered_renamed:
+                        manifest["penc"]["recovered_renamed_paths"] = (
+                            recovered_renamed
+                        )
                     if recovered:
                         outputs.append(recovered_dir)
             except Exception as exc:  # pragma: no cover - defensive boundary
@@ -529,11 +577,13 @@ def decrypt_extract_app(
                     manifest["data"] = meta
                     if include_extract:
                         data_dir = package_out / "data_files"
-                        extracted, local_warnings = _safe_extract_tar(
+                        extracted, local_warnings, renamed = _safe_extract_tar(
                             decoded_tar, data_dir
                         )
                         warnings.extend(local_warnings)
                         manifest["data"]["extracted_files"] = extracted
+                        if renamed:
+                            manifest["data"]["renamed_paths"] = renamed
                         outputs.append(data_dir)
                     if include_decrypt:
                         tar_path = package_out / "data.decoded.tar"
